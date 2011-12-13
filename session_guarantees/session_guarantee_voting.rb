@@ -3,6 +3,7 @@
 # results to. Results that satisfy the required guarantees are output
 # as winners.
 module SessionVoteCounterProtocol
+  # TODO this should be per-request.
   interface input, :set_guarantees, [:session_type] => [] # One(?) of :RYW, :MR, :WFR, :MW
   interface input, :vote_read, [:client, :reqid] => [:value, :v_vector]
   interface input, :vote_write, [:client, :reqid] => [:v_vector]
@@ -16,6 +17,7 @@ end
 module SessionVoteCounter
   include SessionVoteCounterProtocol
   require VersionVectonDominator => :compare_vectors
+  require VersionVectonConcurrency => :merge_vectors
 
   state do
     # TODO consider having this as two deserialized vectors
@@ -97,7 +99,15 @@ module SessionVoteCounter
   # return the correct max.
   bloom :check_winner_read do
   #TODO finish
-    (potential_read_winners * winners).pairs(:reqid => :reqid, :client => :client) do |pw, w|
+    # Add relevant-write-vector from read result to MAX.
+    merge_vectors.version_matrix <= (potential_read_winners * winners).pairs(
+      :reqid => :reqid, :client => :client) do |pw, w|
+      ["#{w.reqid}-#{w.client}", pw.v_vector]
+    end
+    # Add read-vector from passed-in query.
+    merge_vectors.version_matrix <= (read_vector * winners).pairs(
+      :reqid => :reqid) do |rv, w|
+      ["#{w.reqid}-#{w.client}", rv.vector]
     end
   # [result, relevant-write-vector] := read R from S
   #  read-vector := MAX(read-vector,
