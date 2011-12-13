@@ -1,5 +1,7 @@
 require 'rubygems'
 require 'bud'
+require 'quorum/membership'
+require 'causality/version_vector'
  
 # Performs read/version/write operations on static members
 #
@@ -11,26 +13,24 @@ require 'bud'
 # acks are asynchronous streams
 module QuorumAgentProtocol
   include MembershipProtocol
-  # Read Operation
-  interface input, :read, \
-  [:request] => [:key]
-  interface output, :read_ack,
-  [:request, :v_vector] => [:value]
 
-  # Version Query
-  interface input, :version_query, \
-  [:request] => [:key]
-  interface output, :version_ack, \
-  [:request, :v_vector] => []
-
-  # Write Operation
-  interface input, :write, \
-  [:request] => [:key, :v_vector, :value]
-  interface output, :write_ack, \
-  [:request] => []
+  state do
+    # Read Operation
+    interface input, :read, [:request] => [:key]
+    interface output, :read_ack,  [:request, :v_vector] => [:value]
+    
+    # Version Query
+    interface input, :version_query, [:request] => [:key]
+    interface output, :version_ack, [:request, :v_vector] => []
+    
+    # Write Operation
+    interface input, :write, [:request] => [:key, :v_vector, :value]
+    interface output, :write_ack, [:request] => []
+  end
 end
 
 module QuorumAgent
+  include QuorumAgentProtocol
   include StaticMembership
   import VersionVectorKVS => :vvkvs
 
@@ -75,10 +75,10 @@ module QuorumAgent
 
   # Reply to version operation requests to members
   bloom do
-    vvkvs.read <= version_request do |v|
+    vvkvs.version_query <= version_request do |v|
       [[v.src, v.request], v.key]
     end
-    version_response <~ vvkvs.read_ack do |a|
+    version_response <~ vvkvs.version_ack do |a|
       [ip_port, a.request[0], a.request[1], a.v_vector]
     end
   end

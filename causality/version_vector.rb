@@ -160,7 +160,9 @@ module VersionVectorConcurrency
   bloom do
     vvd.domination_query <= (version_matrix * version_matrix)\
       .pairs(:request => :request) do |v1, v2|
-      [[v1.request, v1.v_vector, v2.v_vector], v1.v_vector, v2.v_vector] 
+      if v1.v_vector != v2.v_vector
+        [[v1.request, v1.v_vector, v2.v_vector], v1.v_vector, v2.v_vector] 
+      end
     end
     obselete_matrix <= vvd.result do |x|
       [x.request[0], x.request[1]] if x.order == -1
@@ -196,6 +198,11 @@ module VersionVectorKVSProtocol
     # Read operations
     interface input, :read, [:request] => [:key]
     interface output, :read_ack, [:request, :v_vector] => [:value]
+
+    # Read operations
+    interface input, :version_query, [:request] => [:key]
+    interface output, :version_ack, [:request, :v_vector] => []
+
     # Write operations
     interface input, :write, [:request] => [:key, :v_vector, :value]
     interface output, :write_ack, [:request, :v_vector] => [:value]
@@ -212,9 +219,12 @@ module VersionVectorKVS
   end
 
   # Handle Read Requests
-  bloom :read do
+  bloom :read_and_version do
     read_ack <= (read * kv_store).pairs(:key => :key) do |r,s|
       [r.request, s.v_vector, s.value]
+    end
+    version_ack <= (version_query * kv_store).pairs(:key => :key) do |v,s|
+      [v.request, s.v_vector]
     end
   end
   
