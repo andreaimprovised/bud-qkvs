@@ -16,6 +16,11 @@ class TestVersionVectors < Test::Unit::TestCase
     include VersionVectorSerializer
   end
 
+  class VVMSerializer
+    include Bud
+    include VersionMatrixSerializer
+  end
+
   class VVMerger
     include Bud
     include VersionVectorMerge
@@ -42,6 +47,7 @@ class TestVersionVectors < Test::Unit::TestCase
     @c = VVDomination.new
     @d = VVConcurrency.new
     @e = VVKVS.new
+    @f = VVMSerializer.new
   end
 
   def teardown
@@ -139,5 +145,18 @@ class TestVersionVectors < Test::Unit::TestCase
     set_eq([[3, [["a", 1], ["b", 2]], "zig"], 
             [3, [["a", 2], ["b", 1]], "kag"]],
            @e.read_ack)
+  end
+
+  def test_f_m_serializer
+    p "matrix serialization"
+    @f.serialize <+ [[0, [['a', 0], ['b', 1], ['c', 2]]], 
+                     [0, [['a', 2], ['b', 0], ['c', 1]]]]
+    @f.tick
+    p @f.serialize_ack.to_a
+    @f.deserialize <+ [[0, [[['a', 0], ['b', 1], ['c', 2]],
+                           [['a', 2], ['b', 0], ['c', 1]]]
+                       ]]
+    @f.tick
+    p @f.deserialize_ack.to_a
   end
 end

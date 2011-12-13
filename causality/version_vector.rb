@@ -23,11 +23,43 @@ module VersionVectorSerializer
     serialize_ack <= serialize.reduce({}) do |meta, x|
       meta[x.request] ||= []
       meta[x.request] << [x.server, x.version]
+      meta[x.request].sort
       meta
     end
     deserialize_ack <= deserialize.flat_map do |x|
       x.v_vector.map do |y|
         [x.request, y[0], y[1]]
+      end
+    end
+  end
+end
+
+# Serializes and Deserializes version matrices
+#
+# Outputs are returned in the same timestep and do not persist
+module VersionMatrixSerializerProtocol
+  state do
+    # Serialize
+    interface input, :serialize, [:request, :v_vector] => []
+    interface output, :serialize_ack, [:request] => [:v_matrix]
+    # Deserialize
+    interface input, :deserialize, [:request] => [:v_matrix]
+    interface output, :deserialize_ack, [:request, :v_vector]
+  end
+end
+
+module VersionMatrixSerializer
+  include VersionMatrixSerializerProtocol
+  bloom do
+    serialize_ack <= serialize.reduce({}) do |meta, x|
+      meta[x.request] ||= []
+      meta[x.request] << x.v_vector
+      meta[x.request].sort
+      meta
+  end
+    deserialize_ack <= deserialize.flat_map do |x|
+      x.v_matrix.map do |y|
+        [x.request, y]
       end
     end
   end
