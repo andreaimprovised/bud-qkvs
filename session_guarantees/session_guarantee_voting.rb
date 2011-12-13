@@ -10,7 +10,7 @@ end
 module SessionVoteCounter
   include SessionVoteCounterProtocol
   require VersionVectonDominator => :compare_vectors
-  
+
   state do
     # TODO consider having this as two deserialized vectors
     table :read_vector, [] => [:vector]
@@ -29,7 +29,7 @@ module SessionVoteCounter
   bloom :init_session do
     session_guarantees <= set_guarantees
   end
-  
+
   # Store input => potential winners
   bloom :hold_vote do
     potential_read_winners <= vote_read
@@ -39,7 +39,7 @@ module SessionVoteCounter
   # For compare_*, put the right vectors into compare_vectors.
   # Request could be a unique (:client + :reqid) pair
   # TODO consider a better serialization scheme (list, similar to what andy did?)
-  
+
   bloom :compare_mr_read do
     compare_vectors.domination_query <= (session_guarantees * vote_read * read_vector).combos do |sg, vread, rvec|
       ["#{vread.client}-#{vread.reqid}", rvec.vector, vread.v_vector] if sg.type == :MR
@@ -52,7 +52,7 @@ module SessionVoteCounter
     compare_vectors.domination_query <= (session_guarantees * vote_read * write_vector).combos do |sg, vread, wvec|
       ["#{vread.client}-#{vread.reqid}", wvec.vector, vread.v_vector] if sg.type == :RYW
     end
-  # if RYW then 
+  # if RYW then
   #       check S.vector dominates write-vector
   end
 
@@ -68,10 +68,10 @@ module SessionVoteCounter
     compare_vectors.domination_query <= (session_guarantees * vote_write * write_vector).combos do |sg, vwrite, wvec|
       ["#{vwrite.client}-#{vwrite.reqid}", wvec.vector, vwrite.v_vector] if sg.type == :MW
     end
-  # if MW then 
+  # if MW then
   #      check S.vector dominates write-vector
   end
-  
+
   # Take output from compare_vector and store the :client, reqid of
   # winners and losers in winners or losers scratch. Might need to do
   # :request => [:client, :reqid] extraction.
@@ -83,17 +83,17 @@ module SessionVoteCounter
       result.request.split("-") if order != 1
     end
   end
-  
+
   # TODO should check_* be split into multiple rules?
-  
+
   # Join winners on potential read winners, update read-vector, and
   # return the correct max.
   bloom :check_winner_read do
   #TODO finish
-    (potential_read_winners * winners).pairs(:reqid = :reqid, :client => :client) do |pw, w|
+    (potential_read_winners * winners).pairs(:reqid => :reqid, :client => :client) do |pw, w|
     end
   # [result, relevant-write-vector] := read R from S
-  #  read-vector := MAX(read-vector, 
+  #  read-vector := MAX(read-vector,
   #      relevant-write-vector)
   #  return result
   end
@@ -106,7 +106,7 @@ module SessionVoteCounter
   # wid := write W to S
   #   write-vector[S] := wid.clock
   end
-  
+
   # Remove winners and losers from potential_*_winners.
   bloom :cleanup_results do
     potential_read_winners <- winners
