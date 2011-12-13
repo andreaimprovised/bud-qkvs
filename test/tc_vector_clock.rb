@@ -2,7 +2,6 @@ require 'rubygems'
 require 'bud'
 require 'causality/vector_clock'
 require 'test/unit'
-require 'print/pprint'
 
 class TestVectorClocks < Test::Unit::TestCase
 
@@ -14,7 +13,6 @@ class TestVectorClocks < Test::Unit::TestCase
   class RemoteVC
     include Bud
     include VectorClock
-    include PPrint
   end
 
   class Ordering
