@@ -5,6 +5,9 @@ module SessionVoteCounterProtocol
   interface input, :vote_write, [:client, :reqid] => [:v_vector]
   interface output, :vote_read_winner, [:reqid] => [:value, :v_vector]
   interface output, :vote_write_winner, [:reqid] => [:v_vector]
+
+  # TODO add some interface to initialize a vote
+  # (add reqid => {read,write}vector.)
 end
 
 module SessionVoteCounter
@@ -13,8 +16,9 @@ module SessionVoteCounter
 
   state do
     # TODO consider having this as two deserialized vectors
-    table :read_vector, [] => [:vector]
-    table :write_vector, [] => [:vector]
+    # TODO vectors are now per_request. Update code below.
+    table :read_vector, [:reqid] => [:vector]
+    table :write_vector, [:reqid] => [:vector]
     # List of guarantees. For version 1, assume it's only one, and then
     # we'll see if it's easy to guarantee them all at the same time.
     table :session_guarantees, [:type]
