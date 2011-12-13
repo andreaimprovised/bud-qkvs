@@ -1,4 +1,7 @@
-# This is a work-in-progress that will shortly be split into multiple files.
+
+# This module will be used on a QuorumKVS as a voting module to pass
+# results to. Results that satisfy the required guarantees are output
+# as winners.
 module SessionVoteCounterProtocol
   interface input, :set_guarantees, [:session_type] => [] # One(?) of :RYW, :MR, :WFR, :MW
   interface input, :vote_read, [:client, :reqid] => [:value, :v_vector]
