@@ -46,7 +46,6 @@ class TestReadRepair < Test::Unit::TestCase
 		@RR.read_requests <+ [[0, 'k6', 'a']]
 		@RR.read_requests <+ [[1, 'k7', 'c']]
 		w_req = @RR.sync_callback(@RR.read_acks.tabname, [[0, [['a', 3], ['b', 4]], ['start']], [0, [['a', 3], ['b', 5]], ['go']], [1, [['c', 2], ['d', 4]], ['cabbage']], [1, [['c', 3], ['d', 2]], ['lettuce']]], @RR.write_requests.tabname)
-		p w_req
 		if w_req[0][0] == 0
 			assert_equal([w_req[0][0], w_req[0][1], w_req[0][2].sort, w_req[0][3].sort], [0, 'k6', [['a', 4], ['b', 5]], ['go']])
 			assert_equal([w_req[1][0], w_req[1][1], w_req[1][2].sort, w_req[1][3].sort], [1, 'k7', [['c', 4], ['d', 4]], ['cabbage', 'lettuce']])
