@@ -49,7 +49,7 @@ module SessionQuorumKVSClient
 
 end
 
-module SessionQuorumKVSNodeProtocol
+module SessionQuorumKVSProtocol
   interface input, :quorum_config, [] => [:r_fraction, :w_fraction] # ?
   interface input, :kvread, [:reqid] => [:key, :session_types, :read_vector]    
   interface input, :kvwrite, [:reqid] => [:key, :value, :session_types, :write_vector]
@@ -59,7 +59,7 @@ module SessionQuorumKVSNodeProtocol
 end
 
 # TODO copy most of code from quorum kvs hw3 and make it compatible
-module SessionQuorumKVSNode
+module SessionQuorumKVS
 
   state do
   end
