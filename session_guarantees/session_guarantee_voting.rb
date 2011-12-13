@@ -1,14 +1,16 @@
+require 'rubygems'
+require 'bud'
 
 # This module will be used on a QuorumKVS as a voting module to pass
 # results to. Results that satisfy the required guarantees are output
-# as winners.
+# as satisfiers.
 module SessionVoteCounterProtocol
   # TODO this should be per-request.
   interface input, :set_guarantees, [:session_type] => [] # One(?) of :RYW, :MR, :WFR, :MW
   interface input, :vote_read, [:client, :reqid] => [:value, :v_vector]
   interface input, :vote_write, [:client, :reqid] => [:v_vector]
-  interface output, :vote_read_winner, [:reqid] => [:value, :v_vector]
-  interface output, :vote_write_winner, [:reqid] => [:v_vector]
+  interface output, :vote_read_satisfier, [:reqid] => [:value, :v_vector]
+  interface output, :vote_write_satisfier, [:reqid] => [:v_vector]
 
   # TODO add some interface to initialize a vote
   # (add reqid => {read,write}vector.)
@@ -97,7 +99,7 @@ module SessionVoteCounter
 
   # Join satisfiers on potential read satisfiers, update read-vector, and
   # return the correct max.
-  bloom :check_winner_read do
+  bloom :check_read_satisfiers do
   #TODO finish
     # Add relevant-write-vector from read result to MAX.
     merge_vectors.version_matrix <= (potential_read_satisfiers * satisfiers).pairs(
@@ -115,11 +117,13 @@ module SessionVoteCounter
   #  return result
   end
 
+  bloom :output_read_satisfiers do
+  end
 
   # Join satisfiers on potential write satisfiers, update write-vector, and
   # return the correct updated vector.
   # Something needs to be done about serialization or weird vector value setting...
-  bloom :check_winner_write do
+  bloom :check_satisfier_write do
   # TODO finish
   # wid := write W to S
   #   write-vector[S] := wid.clock
