@@ -1,5 +1,6 @@
 require 'rubygems'
 require 'bud'
+require 'quorum/membership'
  
 # Performs read/version/write operations on static members
 #
