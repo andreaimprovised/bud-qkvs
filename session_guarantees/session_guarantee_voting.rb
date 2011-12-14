@@ -1,14 +1,16 @@
+require 'rubygems'
+require 'bud'
 
 # This module will be used on a QuorumKVS as a voting module to pass
 # results to. Results that satisfy the required guarantees are output
-# as winners.
+# as satisfiers.
 module SessionVoteCounterProtocol
   # TODO this should be per-request.
   interface input, :set_guarantees, [:session_type] => [] # One(?) of :RYW, :MR, :WFR, :MW
   interface input, :vote_read, [:client, :reqid] => [:value, :v_vector]
   interface input, :vote_write, [:client, :reqid] => [:v_vector]
-  interface output, :vote_read_winner, [:reqid] => [:value, :v_vector]
-  interface output, :vote_write_winner, [:reqid] => [:v_vector]
+  interface output, :vote_read_satisfier, [:reqid] => [:value, :v_vector]
+  interface output, :vote_write_satisfier, [:reqid] => [:v_vector]
 
   # TODO add some interface to initialize a vote
   # (add reqid => {read,write}vector.)
@@ -27,22 +29,22 @@ module SessionVoteCounter
     # List of guarantees. For version 1, assume it's only one, and then
     # we'll see if it's easy to guarantee them all at the same time.
     table :session_guarantees, [:type]
-    table :potential_read_winners, vote_read.schema
-    table :potential_write_winners, vote_write.schema
+    table :potential_read_satisfiers, vote_read.schema
+    table :potential_write_satisfiers, vote_write.schema
     # Results that satisfied a guarantee.
-    scratch :winners, [:client, :reqid]
+    scratch :satisfiers, [:client, :reqid]
     # Results that did not satisfy a guarantee.
-    scratch :losers, [:client, :reqid]
+    scratch :non_satisfiers, [:client, :reqid]
   end
 
   bloom :init_session do
     session_guarantees <= set_guarantees
   end
 
-  # Store input => potential winners
+  # Store input => potential satisfiers
   bloom :hold_vote do
-    potential_read_winners <= vote_read
-    potential_write_winners <= vote_write
+    potential_read_satisfiers <= vote_read
+    potential_write_satisfiers <= vote_write
   end
 
   # For compare_*, put the right vectors into compare_vectors.
@@ -82,30 +84,30 @@ module SessionVoteCounter
   end
 
   # Take output from compare_vector and store the :client, reqid of
-  # winners and losers in winners or losers scratch. Might need to do
+  # satisfiers and non_satisfiers in satisfiers or non_satisfiers scratch. Might need to do
   # :request => [:client, :reqid] extraction.
   bloom :store_compare_results do
-    winners <= compare_vectors.result do |result|
+    satisfiers <= compare_vectors.result do |result|
       result.request.split("-") if order == 1
     end
-    losers <= compare_vectors.result do |result|
+    non_satisfiers <= compare_vectors.result do |result|
       result.request.split("-") if order != 1
     end
   end
 
   # TODO should check_* be split into multiple rules?
 
-  # Join winners on potential read winners, update read-vector, and
+  # Join satisfiers on potential read satisfiers, update read-vector, and
   # return the correct max.
-  bloom :check_winner_read do
+  bloom :check_read_satisfiers do
   #TODO finish
     # Add relevant-write-vector from read result to MAX.
-    merge_vectors.version_matrix <= (potential_read_winners * winners).pairs(
+    merge_vectors.version_matrix <= (potential_read_satisfiers * satisfiers).pairs(
       :reqid => :reqid, :client => :client) do |pw, w|
       ["#{w.reqid}-#{w.client}", pw.v_vector]
     end
     # Add read-vector from passed-in query.
-    merge_vectors.version_matrix <= (read_vector * winners).pairs(
+    merge_vectors.version_matrix <= (read_vector * satisfiers).pairs(
       :reqid => :reqid) do |rv, w|
       ["#{w.reqid}-#{w.client}", rv.vector]
     end
@@ -115,21 +117,24 @@ module SessionVoteCounter
   #  return result
   end
 
-  # Join winners on potential write winners, update write-vector, and
+  bloom :output_read_satisfiers do
+  end
+
+  # Join satisfiers on potential write satisfiers, update write-vector, and
   # return the correct updated vector.
   # Something needs to be done about serialization or weird vector value setting...
-  bloom :check_winner_write do
+  bloom :check_satisfier_write do
   # TODO finish
   # wid := write W to S
   #   write-vector[S] := wid.clock
   end
 
-  # Remove winners and losers from potential_*_winners.
+  # Remove satisfiers and non_satisfiers from potential_*_satisfiers.
   bloom :cleanup_results do
-    potential_read_winners <- winners
-    potential_read_winners <- losers
-    potential_write_winners <- winners
-    potential_write_winners <- losers
+    potential_read_satisfiers <- satisfiers
+    potential_read_satisfiers <- non_satisfiers
+    potential_write_satisfiers <- satisfiers
+    potential_write_satisfiers <- non_satisfiers
   end
 
 end
