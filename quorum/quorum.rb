@@ -29,17 +29,49 @@ module QuorumAgentProtocol
   end
 end
 
+# Serializes several (vector, value) pairs into one field
+module VectorValueMatrixSerializerProtocol
+  state do
+    # Serialize
+    interface input, :serialize, [:request, :v_vector] => [:value]
+    interface output, :serialize_ack, [:request] => [:matrix]
+    # Deserialize
+    interface input, :deserialize, [:request] => [:matrix]
+    interface input, :deserialize_ack, [:request, :v_vector] => [:value]
+  end
+end
+
+module VectorValueMatrixSerializer
+  include VectorValueMatrixSerializerProtocol
+  bloom do
+    serialize_ack <= serialize.reduce({}) do |meta, x|
+      meta[x.request] ||= []
+      meta[x.request] << [x.v_vector, x.value]
+      meta[x.request].sort
+      meta
+    end
+    deserialize_ack <= deserialize.flat_map do |x|
+      x.matrix.map do |y|
+        [x.request, y[0], y[1]]
+      end
+    end
+  end
+end
+
 module QuorumAgent
   include QuorumAgentProtocol
   include StaticMembership
   import VersionVectorKVS => :vvkvs
+  import VersionMatrixSerializer => :vms
+  import VectorValueMatrixSerializer => :vvms
 
   state do
     channel :read_request, [:@dst, :src, :request] => [:key]
-    channel :read_response, [:dst, :@src, :request, :v_vector] => [:value]
+    channel :read_response, [:dst, :@src, :request] => [:matrix]
     channel :version_request, [:@dst, :src, :request] => [:key]
-    channel :version_response, [:dst, :@src, :request, :v_vector] => []
-    channel :write_request, [:@dst, :src, :request] => [:key, :v_vector, :value]
+    channel :version_response, [:dst, :@src, :request] => [:matrix]
+    channel :write_request, \
+      [:@dst, :src, :request] => [:key, :v_vector, :value]
     channel :write_response, [:dst, :@src, :request] => []
   end
   
@@ -48,8 +80,10 @@ module QuorumAgent
     read_request <~ (member * read).pairs do |m, r|
       [m.host, ip_port, r.request, r.key]
     end
-    read_ack <= read_response do |r|
-      [r.request, r.v_vector, r.value]
+    vvms.deserialize <= read_response do |r|
+      [r.request, r.matrix]
+    end
+    read_ack <= vvms.deserialize_ack
     end
   end
 
@@ -103,4 +137,70 @@ module QuorumAgent
     end
   end
 
+end
+
+module RWTimeoutQuorumAgentProtocol
+  include QuorumAgentProtocol
+  
+  # interface input, :begin_vote, [:ballot_id] => [:num_votes]
+  # interface input, :cast_vote, [:ballot_id, :agent, :vote, :note]
+  # interface output, :result, [:ballot_id] => [:status, :result,
+  #                                             :votes, :notes
+
+  # interface input, :set_alarm, [:ident] => [:duration]
+  # interface input, :stop_alarm, [:ident] => []
+  # interface output, :alarm, [:ident] => []
+
+  state do
+    # Parameter Input and Status Output
+    # ack_size is the number of acks to wait for to declare victory
+    # duration is the time in units of 0.1s to wait until failure
+    interface input, :parameters, [:request] => [:ack_num, :duration]
+    interface input, :delete, [:request] => []
+    interface output, :status, [:request] => [:state]   
+  end
+
+end
+
+module RWTimeoutQuorumAgent
+  import Alarm => :alarm
+  import VoteCounter => :voter
+  import QuorumAgent => :qa
+
+  state do
+    table :read_acks, [:request, :v_vector] => [:
+  end
+
+  # Begin vote and set alarm
+  bloom do
+    voter.begin_vote <= (read * parameters)\
+      .pairs(:request => :request) do |x,p| 
+      [x.request, p.ack_num]
+    end
+    voter.begin_vote <= (version_query * parameters)\
+      .pairs(:request => :request) do |x,p| 
+      [x.request, p.ack_num]
+    end
+    voter.begin_vote <= (write * parameters)\
+      .pairs(:request => :request) do |x,p| 
+      [x.request, p.ack_num]
+    end
+    alarm.set_alarm <= (read * parameters)\
+      .pairs(:request => :request) do |x,p|
+      [x.request, p.duration]
+    end
+    alarm.set_alarm <= (version_query * parameters)\
+      .pairs(:request => :request) do |x,p|
+      [x.request, p.duration]
+    end
+    alarm.set_alarm <= (write * parameters)\
+      .pairs(:request => :request) do |x,p|
+      [x.request, p.duration]
+    end
+  end
+  
+  # record votes!
+  bloom do
+    voter.cast_vote <= read_ack do |
+  end
 end
