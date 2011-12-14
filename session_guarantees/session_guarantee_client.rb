@@ -5,15 +5,17 @@ module SessionQuorumKVSClientProtocol
   interface input, :kvdel, [:session_id, :reqid] => [:key]
 
   interface input, :session_response, [:reqid] => [:session_id]
-  interface output, :kvget_response, [:session_id, :reqid, :value]
-  interface output, :kvput_response, [:session_id, :reqid]
-  interface output, :kvdel_response, [:session_id, :reqid]
+  interface output, :kvget_response, [:reqid, :value]
+  interface output, :kvputdel_response, [:reqid]
 end
 
 
 module SessionQuorumKVSClient
   require SessionQuorumKVSClientProtocol
   require SessionQuorumKVSNodeProtocol
+
+  bootstrap do
+  end
 
   state do
     table :sessions, [:session_id] => [:session_types]
@@ -25,25 +27,34 @@ module SessionQuorumKVSClient
     # Uses budtime as the session_id
     sessions <= create_session.argagg(:choose_rand, [], :reqid) { |a| [@budtime, a[1]] }
     sessions_response <= create_session.argagg(:choose_rand, [], :reqid) { |a| [a[0], @budtime] }
+    # How do you initialize read/write_vector...
   end
 
   bloom :request_read do
-
+    kvread <= (kvget * sessions * read_vectors).pairs(kvget.session_id => sessions.session_id,
+                                                      sessions.session_id => read_vectors.session_id) do |r, s, v|
+      [r.reqid, r.key, s.session_types, v.read_vector]
+    end
   end
 
   bloom :request_write do
-  end
+    kvwrite <= (kvdel * sessions * write_vectors).pairs(kvget.session_id => sessions.session_id,
+                                                        sessions.session_id => write_vectors.session_id) do |r, s, v|
+      [r.reqid, r.key, nil, s.session_types, v.write_vector]
+    end
 
-  bloom :request_delete do
-  end
-
-  bloom :respond_to_get do
+    kvwrite <= (kvput * sessions * write_vectors).pairs(kvget.session_id => sessions.session_id,
+                                                        sessions.session_id => write_vectors.session_id) do |r, s, v|
+      [r.reqid, r.key, r.value, s.session_types, v.write_vector]
+    end
   end
 
   bloom :respond_to_write do
+    kvputdel_response <= kvwrite_response{|r| [r.reqid]}
   end
 
-  bloom :respond_to_del do
+  bloom :respond_to_read do
+    kvputdel_response <= kvwrite_response{|r| [r.reqid, r.value]}
   end
 
 end
