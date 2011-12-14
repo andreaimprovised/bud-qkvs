@@ -157,6 +157,7 @@ module RWTimeoutQuorumAgentProtocol
     # duration is the time in units of 0.1s to wait until failure
     interface input, :parameters, [:request] => [:ack_num, :duration]
     interface input, :delete, [:request] => []
+    # states are - :success, :fail, :in_progress
     interface output, :status, [:request] => [:state]   
   end
 
@@ -168,7 +169,7 @@ module RWTimeoutQuorumAgent
   import QuorumAgent => :qa
 
   state do
-    table :read_acks, [:request, :v_vector] => [:
+    table :acks, [:request] => [:src]
   end
 
   # Begin vote and set alarm
@@ -201,6 +202,26 @@ module RWTimeoutQuorumAgent
   
   # record votes!
   bloom do
-    voter.cast_vote <= read_ack do |
+    # put acks in cast_vote
+    voter.cast_vote <= qa.read_response {|rr| [rr.request, rr.src, "ack", "no note"]}
+    voter.cast_vote <= qa.version_response {|vr| [vr.request, vr.src, "ack", "no note"]}
+    voter.cast_vote <= qa.write_response {|wr| [wr.request, wr.src, "ack", "no note"]}
+  end
+
+  bloom do
+     # timer runs out, vote fails, output error
+    status <= (alarm.alarm * voter.result).pairs(:ident=>:ballot_id) do |l,r|
+      [l.ident, :fail] if r.status == :fail
+    end
+    # timer runs out, vote succeeds, output success
+    status <= (alarm.alarm * voter.result).pairs(:ident=>:ballot_id) do |l,r|
+      [l.ident, :success] if r.status == :success
+    end
+
+    # vote successful, timer still going, clear timer: output success
+=begin
+    status <= vote.result do |r|
+      [r.ballot_id, :success] if 
+=end
   end
 end
