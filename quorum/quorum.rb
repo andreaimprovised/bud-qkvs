@@ -2,32 +2,7 @@ require 'rubygems'
 require 'bud'
 require 'quorum/membership'
 require 'causality/version_vector'
- 
-# Performs read/version/write operations on static members
-#
-# Doesn't know about session guarantees 
-#
-# Write operation must specifiy version vector.  No logic for
-# specifying the proper version vector.
-#
-# acks are asynchronous streams
-module QuorumAgentProtocol
-  include MembershipProtocol
 
-  state do
-    # Read Operation
-    interface input, :read, [:request] => [:key]
-    interface output, :read_ack,  [:request, :v_vector] => [:value]
-    
-    # Version Query
-    interface input, :version_query, [:request] => [:key]
-    interface output, :version_ack, [:request, :v_vector] => []
-    
-    # Write Operation
-    interface input, :write, [:request] => [:key, :v_vector, :value]
-    interface output, :write_ack, [:request] => []
-  end
-end
 
 # Serializes several (vector, value) pairs into one field
 module VectorValueMatrixSerializerProtocol
@@ -37,12 +12,13 @@ module VectorValueMatrixSerializerProtocol
     interface output, :serialize_ack, [:request] => [:matrix]
     # Deserialize
     interface input, :deserialize, [:request] => [:matrix]
-    interface input, :deserialize_ack, [:request, :v_vector] => [:value]
+    interface output, :deserialize_ack, [:request, :v_vector] => [:value]
   end
 end
 
 module VectorValueMatrixSerializer
   include VectorValueMatrixSerializerProtocol
+
   bloom do
     serialize_ack <= serialize.reduce({}) do |meta, x|
       meta[x.request] ||= []
@@ -56,11 +32,40 @@ module VectorValueMatrixSerializer
       end
     end
   end
+
 end
 
-module QuorumAgent
-  include QuorumAgentProtocol
-  include StaticMembership
+# Performs read/version/write operations on static members
+#
+# Doesn't know about session guarantees 
+#
+# Write operation must specifiy version vector.  No logic for
+# specifying the proper version vector.
+#
+# acks are asynchronous streams
+module QuorumRemoteProcedureProtocol
+
+  # Request must be unique across all read/version/write operations
+  # Agent is a network identifier
+
+  state do
+    # Read Operation
+    interface input, :read, [:request, :agent] => [:key]
+    interface output, :read_ack,  [:request, :agent, :v_vector] => [:value]
+    
+    # Version Query
+    interface input, :version_query, [:request, :agent] => [:key]
+    interface output, :version_ack, [:request, :agent, :v_vector] => []
+    
+    # Write Operation
+    interface input, :write, [:request, :agent] => [:key, :v_vector, :value]
+    interface output, :write_ack, [:request, :agent] => []
+  end
+
+end
+
+module QuorumRemoteProcedure
+  include QuorumRemoteProcedureProtocol
   import VersionVectorKVS => :vvkvs
   import VersionMatrixSerializer => :vms
   import VectorValueMatrixSerializer => :vvms
@@ -69,21 +74,22 @@ module QuorumAgent
     channel :read_request, [:@dst, :src, :request] => [:key]
     channel :read_response, [:dst, :@src, :request] => [:matrix]
     channel :version_request, [:@dst, :src, :request] => [:key]
-    channel :version_response, [:dst, :@src, :request] => [:matrix]
+    channel :version_response, [:dst, :@src, :request] => [:v_matrix]
     channel :write_request, \
       [:@dst, :src, :request] => [:key, :v_vector, :value]
     channel :write_response, [:dst, :@src, :request] => []
   end
   
-  # Send out read operation requests to members and ack
+  # Send out read operation request and ack
   bloom do
-    read_request <~ (member * read).pairs do |m, r|
-      [m.host, ip_port, r.request, r.key]
+    read_request <~ read do |r|
+      [r.agent, ip_port, r.request, r.key]
     end
     vvms.deserialize <= read_response do |r|
-      [r.request, r.matrix]
+      [[r.request, r.dst], r.matrix]
     end
-    read_ack <= vvms.deserialize_ack
+    read_ack <= vvms.deserialize_ack do |a|
+      [a.request[0], a.request[1], a.v_vector, a.value]
     end
   end
 
@@ -92,38 +98,43 @@ module QuorumAgent
     vvkvs.read <= read_request do |r|
       [[r.src, r.request], r.key]
     end
-    read_response <~ vvkvs.read_ack do |a|
-      [ip_port, a.request[0], a.request[1], a.v_vector, a.value]
+    vvms.serialize <= vvkvs.read_ack
+    read_response <~ vvms.serialize_ack do |a|
+      [ip_port, a.request[0], a.request[1], a.matrix]
     end
   end
 
-  # Send out version operation requests to members and ack
+  # Send out version operation request and ack
   bloom do
-    version_request <~ (member * version_query).pairs do |m, v|
-      [m.host, ip_port, v.request, v.key]
+    version_request <~ version_query do |x|
+      [x.agent, ip_port, x.request, x.key]
     end
-    version_ack <= version_response do |v|
-      [v.request, v.v_vector]
+    vms.deserialize <= version_response do |x|
+      [[x.request, x.dst], x.v_matrix]
+    end
+    version_ack <= vms.deserialize_ack do |a|
+      [a.request[0], a.request[1], a.v_vector]
     end
   end
 
-  # Reply to version operation requests to members
+  # Reply to version operation request
   bloom do
     vvkvs.version_query <= version_request do |v|
       [[v.src, v.request], v.key]
     end
-    version_response <~ vvkvs.version_ack do |a|
-      [ip_port, a.request[0], a.request[1], a.v_vector]
+    vms.serialize <= vvkvs.version_ack
+    version_response <~ vms.serialize_ack do |a|
+      [ip_port, a.request[0], a.request[1], a.v_matrix]
     end
   end
-  
+
   # Send out write operation requests from members and ack
   bloom do
-    write_request <~ (member * write).pairs do |m, w|
-      [m.host, ip_port, w.request, w.key, w.v_vector, w.value]
+    write_request <~ write do |w|
+      [w.agent, ip_port, w.request, w.key, w.v_vector, w.value]
     end
     write_ack <= write_response do |w|
-      [w.request]
+      [w.request, w.dst]
     end
   end
 
@@ -157,6 +168,7 @@ module RWTimeoutQuorumAgentProtocol
     # duration is the time in units of 0.1s to wait until failure
     interface input, :parameters, [:request] => [:ack_num, :duration]
     interface input, :delete, [:request] => []
+    # states are - :success, :fail, :in_progress
     interface output, :status, [:request] => [:state]   
   end
 
@@ -168,7 +180,7 @@ module RWTimeoutQuorumAgent
   import QuorumAgent => :qa
 
   state do
-    table :read_acks, [:request, :v_vector] => [:
+    table :acks, [:request] => [:src]
   end
 
   # Begin vote and set alarm
@@ -201,6 +213,26 @@ module RWTimeoutQuorumAgent
   
   # record votes!
   bloom do
-    voter.cast_vote <= read_ack do |
+    # put acks in cast_vote
+    voter.cast_vote <= qa.read_response {|rr| [rr.request, rr.src, "ack", "no note"]}
+    voter.cast_vote <= qa.version_response {|vr| [vr.request, vr.src, "ack", "no note"]}
+    voter.cast_vote <= qa.write_response {|wr| [wr.request, wr.src, "ack", "no note"]}
+  end
+
+  bloom do
+     # timer runs out, vote fails, output error
+    status <= (alarm.alarm * voter.result).pairs(:ident=>:ballot_id) do |l,r|
+      [l.ident, :fail] if r.status == :fail
+    end
+    # timer runs out, vote succeeds, output success
+    status <= (alarm.alarm * voter.result).pairs(:ident=>:ballot_id) do |l,r|
+      [l.ident, :success] if r.status == :success
+    end
+
+    # vote successful, timer still going, clear timer: output success
+=begin
+    status <= vote.result do |r|
+      [r.ballot_id, :success] if 
+=end
   end
 end

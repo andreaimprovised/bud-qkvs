@@ -56,7 +56,7 @@ module VersionMatrixSerializer
       meta[x.request] << x.v_vector
       meta[x.request].sort
       meta
-  end
+    end
     deserialize_ack <= deserialize.flat_map do |x|
       x.v_matrix.map do |y|
         [x.request, y]
