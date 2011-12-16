@@ -71,6 +71,8 @@ module QuorumRemoteProcedure
   import VectorValueMatrixSerializer => :vvms
 
   state do
+    table :pending_request, [:request] => []
+
     channel :read_request, [:@dst, :src, :request] => [:key]
     channel :read_response, [:dst, :@src, :request] => [:matrix]
     channel :version_request, [:@dst, :src, :request] => [:key]
@@ -80,6 +82,22 @@ module QuorumRemoteProcedure
     channel :write_response, [:dst, :@src, :request] => []
   end
   
+  # Logic to play nice with other users of the vvkvs!
+  bloom do
+    # Keep track of requests we'll make on the vvkvs
+    pending_request <= read_request { |r| [[r.src, r.request]] }
+    pending_request <= version_request { |v| [[v.src, v.request]] }
+    pending_request <= write_request { |w| [[w.src, w.request]] }
+
+    # Forget about pending requests that have acked!
+    pending_request <- (pending_request * vvkvs.read_ack)\
+      .lefts(:request => :request)
+    pending_request <- (pending_request * vvkvs.write_ack)\
+      .lefts(:request => :request)
+    pending_request <- (pending_request * vvkvs.version_ack)\
+      .lefts(:request => :request)
+  end
+
   # Send out read operation request and ack
   bloom do
     read_request <~ read do |r|
@@ -98,7 +116,8 @@ module QuorumRemoteProcedure
     vvkvs.read <= read_request do |r|
       [[r.src, r.request], r.key]
     end
-    vvms.serialize <= vvkvs.read_ack
+    vvms.serialize <= (vvkvs.read_ack * pending_request)\
+      .lefts(:request => :request)
     read_response <~ vvms.serialize_ack do |a|
       [ip_port, a.request[0], a.request[1], a.matrix]
     end
@@ -122,7 +141,8 @@ module QuorumRemoteProcedure
     vvkvs.version_query <= version_request do |v|
       [[v.src, v.request], v.key]
     end
-    vms.serialize <= vvkvs.version_ack
+    vms.serialize <= (vvkvs.version_ack * pending_request)\
+      .lefts(:request => :request)
     version_response <~ vms.serialize_ack do |a|
       [ip_port, a.request[0], a.request[1], a.v_matrix]
     end
@@ -143,7 +163,8 @@ module QuorumRemoteProcedure
     vvkvs.write <= write_request do |w|
       [[w.src, w.request], w.key, w.v_vector, w.value]
     end
-    write_response <~ vvkvs.write_ack do |a|
+    write_response <~ (vvkvs.write_ack * pending_request)\
+      .lefts(:request => :request) do |a|
       [ip_port, a.request[0], a.request[1]]
     end
   end
