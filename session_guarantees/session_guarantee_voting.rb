@@ -87,10 +87,12 @@ module SessionVoteCounter
     # Init session guarantees.
     session_guarantees <= init_request {|init| [init.reqid, init.session_types]}
     # De-serialize and init read vectors.
-    matrix_serializer.deserialize <= init_request {|init| init.read_vectors }
+    matrix_serializer.deserialize <= init_request do |init|
+      [init.reqid, init.read_vectors]
+    end
     read_vectors <= matrix_serializer.deserialize_ack
     # Set write vector.
-    write_vector <= init_request {|init| init.write_vector }
+    write_vector <= init_request {|init| [init.reqid, init.write_vector] }
   end
 
   bloom :aggregate_read_votes do
