@@ -28,17 +28,20 @@ module SessionVoteCounterProtocol
     #     value
     # @param [Object] reqid a unique id for the request
     # @param [Object] value the value read from the KVS.
-    interface input, :vote_read, [:v_vector, :reqid] => [:value]
+    interface input, :add_read, [:v_vector, :reqid] => [:value]
 
     # Adds a 'vote' of a write result from a Quorum node.
     # @param [VersionVector] v_vector the version vector for the written
     #     value
     # @param [Object] reqid a unique id for the request
-    interface input, :vote_write, [:v_vector, :reqid]
+    interface input, :add_write, [:v_vector, :reqid]
 
     # Signals to the module that the request is finished.
     # @param [Object] reqid the unique id of the request
     interface input, :end_request, [:reqid]
+
+    # NOTE if consistently outputing is a performance concern, make it
+    # only output on end_request.
 
     # The stream of read results that satisfy all session guarantees.
     # There is either a single maximum result, or a number of maxmimal
@@ -68,16 +71,17 @@ module SessionVoteCounter
     # Per-reqid list of requested session guarantees.
     table :session_guarantees, [:reqid] => [:session_types]
     # Table of all read results passed in.
-    table :pending_reads, vote_read.schema
+    table :pending_reads, add_read.schema
     # Table of all write results passed in.
-    table :pending_writes, vote_write.schema
+    table :pending_writes, add_write.schema
     # Temporary collection of non-read_vector read results.
     scratch :pre_read_results, output_read_result.schema
   end
 
   bloom :init_session do
+    # Init session guarantees.
     session_guarantees <= init_request {|init| [init.reqid, init.session_types]}
-    # Set read vectors.
+    # De-serialize and init read vectors.
     matrix_serializer.deserialize <= init_request {|init| init.read_vectors }
     read_vector <= matrix_serializer.deserialize_ack
     # Set write vector.
@@ -85,53 +89,58 @@ module SessionVoteCounter
   end
 
   bloom :aggregate_read_votes do
-    pending_reads <= vote_read
+    pending_reads <= add_read
+    # vector_aggregator will output the max set of read version vectors.
     vector_aggregator.version_matrix <= pending_reads {|r| [r.reqid, r.v_vector]}
   end
 
   bloom :handle_read_session_guarantees do
     # Add read vectors to aggregate for monotonic reads.
-    vector_aggregator.version_matrix <= (session_guarantees * read_vectors).pairs(
-      :reqid => :reqid) do |guarantees, vector|
+    vector_aggregator.version_matrix <= (session_guarantees * \
+          read_vectors).matches do |guarantees, vector|
       vector if guarantees.session_types.include? :MR
     end
     # Add write vectors to aggregate for read your writes.
-    vector_aggregator.version_matrix <= (session_guarantees * write_vectors).pairs(
-      :reqid => :reqid) do |guarantees, vector|
+    vector_aggregator.version_matrix <= (session_guarantees * \
+          write_vectors).matches do |guarantees, vector|
       vector if guarantees.session_types.include? :RYW
     end
   end
 
   bloom :merge_write_votes do
-    pending_writes <= vote_write
-    vector_merger.version_matrix <= vote_write {|w| [w.reqid, w.v_vector]}
+    pending_writes <= add_write
+    # vector_merger will merge all write vectors into a total max vector.
+    vector_merger.version_matrix <= add_write {|w| [w.reqid, w.v_vector]}
   end
 
   bloom :handle_write_session_guarantees do
     # Add read vectors to merge for writes follow reads.
-    vector_merger.version_matrix <= (session_guarantees * read_vectors).pairs(
-      :reqid => :reqid) do |guarantees, vector|
+    vector_merger.version_matrix <= (session_guarantees * \
+          read_vectors).matches do |guarantees, vector|
       vector if guarantees.session_types.include? :WFR
     end
     # Add write vectors to merge for read your writes.
-    vector_merger.version_matrix <= (session_guarantees * write_vectors).pairs(
-      :reqid => :reqid) do |guarantees, vector|
+    vector_merger.version_matrix <= (session_guarantees * \
+          write_vectors).pairs(:reqid => :reqid) do |guarantees, vector|
       vector if guarantees.session_types.include? :MW
     end
   end
 
   bloom :output_read_results do
-    pre_read_result <= (vector_aggregator.minimal_matrix * pending_reads).pairs(
-      :reqid => :reqid, :v_vector => :v_vector) do |min,reads|
+    # Get all non-read_vector results.
+    pre_read_result <= (vector_aggregator.minimal_matrix * \
+          pending_reads).matches do |min,reads|
       [min.reqid, min.v_vector, reads.value]
     end
-    output_read_result <= (vector_aggregator.minimal_matrix * read_vector).pairs(
-      :reqid => :reqid) do |min,read_vec|
+    # Add the read_vector result if the results exist.
+    output_read_result <= (vector_aggregator.minimal_matrix * \
+          read_vector).pairs(:reqid => :reqid) do |min,read_vec|
       [min.reqid, read_vec.v_vector, nil] if pre_read_results.include? min.reqid
     end
   end
 
   bloom :output_write_results do
+    # Output the new merge write vector.
     output_write_result <= vector_merger.merge_vector
   end
 
