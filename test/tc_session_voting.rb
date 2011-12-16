@@ -9,24 +9,47 @@ class SessionVoter
   include SessionVoteCounter
 
   bloom do
-    stdio <~ output_read_result.inspected
-    stdio <~ output_write_result.inspected
+#    stdio <~ read_vectors.inspected
+#    stdio <~ write_vector.inspected
   end
 end
 
 class TestSessionVoting < Test::Unit::TestCase
 
+  def wait
+    5.times do
+      @voter.tick
+    end
+  end
+
+  def init_dummy_request
+    @voter.init_request <+ [[0, [:MR, :MW], [['a', 0], ['b', 1]], ['a', 1]]]
+  end
+
   def setup
     @voter = SessionVoter.new()
-    @voter.run_bg
   end
 
-  def teardown
-    @voter.stop
+  def test_init_guarantees
+    p 'test_init_guarantees'
+    init_dummy_request
+    wait
+    assert(@voter.session_guarantees.include? [0, [:MR, :MW]])
   end
 
-  def test_sanity
-    p 'test_sanity'
+  def test_init_read_vectors
+    p 'test_init_read_vectors'
+    init_dummy_request
+    wait
+    assert(@voter.read_vectors.include? [0, ['a', 0]])
+    assert(@voter.read_vectors.include? [0, ['b', 1]])
+  end
+
+  def test_init_write_vector
+    p 'test_init_write_vectors'
+    init_dummy_request
+    wait
+    assert(@voter.write_vector.include? [0, ['a', 1]])
   end
 
 end
