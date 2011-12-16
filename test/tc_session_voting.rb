@@ -23,7 +23,7 @@ class TestSessionVoting < Test::Unit::TestCase
   end
 
   def init_dummy_request
-    @voter.init_request <+ [[0, [:MR, :MW], [['a', 0], ['b', 1]], ['a', 1]]]
+    @voter.init_request <+ [[0, [:foo, :bar], [['a', 0], ['b', 1]], ['a', 1]]]
   end
 
   def setup
@@ -34,7 +34,7 @@ class TestSessionVoting < Test::Unit::TestCase
     p 'test_init_guarantees'
     init_dummy_request
     wait
-    assert(@voter.session_guarantees.include? [0, [:MR, :MW]])
+    assert(@voter.session_guarantees.include? [0, [:foo, :bar]])
   end
 
   def test_init_read_vectors
