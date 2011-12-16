@@ -15,6 +15,7 @@ require 'sequences'
 # Once a node receives a message, the message will be outputted to recv_message.
 #
 module GossipProtocol
+  import Counter => :c
 
   state do
     # Any messages inputted into send_message will be propagated out to known members
@@ -49,10 +50,13 @@ module GossipProtocol
     unchosen_members <= members.notin(chosen_member, :host => :host)
     members_to_send <= unchosen_members { |x| x if (rand(10) < 2) }
     members_to_send <= chosen_member { |x| [x.host] }
+    seq.increment <= [["counter"]]
+    seq.get_count <= [["counter"]]
+    chosen_message <= messages_to_send.group([], chooserand)
     # send all the messages to the chosen members
-    sent_messages <= (messages_to_send * members_to_send).pairs { |l, r|
+    sent_messages <= (chosen_message * seq.return_count * members_to_send).combos { |l, m, r|
       if r.host != ip_port
-        [r.host, l.from, l.msg_type, l.msgid, l.message]
+        [r.host, l.from, l.msg_type, m.tally, l.message]
       end
     }
     message_chan <~ sent_messages

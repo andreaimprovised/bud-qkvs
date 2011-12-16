@@ -39,7 +39,7 @@ end
 
 # Performs read/version/write operations on static members
 #
-# Doesn't know about session guarantees 
+# Doesn't know about session guarantees
 #
 # Write operation must specifiy version vector.  No logic for
 # specifying the proper version vector.
@@ -54,11 +54,11 @@ module QuorumRemoteProcedureProtocol
     # Read Operation
     interface input, :read, [:request, :agent] => [:key]
     interface output, :read_ack,  [:request, :agent, :v_vector] => [:value]
-    
+
     # Version Query
     interface input, :version_query, [:request, :agent] => [:key]
     interface output, :version_ack, [:request, :agent, :v_vector] => []
-    
+
     # Write Operation
     interface input, :write, [:request, :agent] => [:key, :v_vector, :value]
     interface output, :write_ack, [:request, :agent] => []
@@ -71,6 +71,9 @@ module QuorumRemoteProcedure
   import VersionVectorKVS => :vvkvs
   import VersionMatrixSerializer => :vms
   import VectorValueMatrixSerializer => :vvms
+  import StaticMembership => :sm
+  import GossipProtocol =>:gp
+  import Counter => :c
 
   state do
     table :pending_request, [:request] => []
@@ -82,8 +85,24 @@ module QuorumRemoteProcedure
     channel :write_request, \
       [:@dst, :src, :request] => [:key, :v_vector, :value]
     channel :write_response, [:dst, :@src, :request] => []
+
+    # periodic for gossip protocol
+    periodic :gossip_interval, 1
   end
-  
+
+#   # Adding members to gossip protocol
+#   bloom do
+#     gp.add_member <= sm.members do |x|
+#       [x.host, ]
+#     end
+#   end
+
+#   # Incorporating gossip protocol
+#   bloom do
+#     gp.message_chan <+ vvkvs.kv_store do |x|
+#     end
+#   end
+
   # Logic to play nice with other users of the vvkvs!
   bloom do
     # Keep track of requests we'll make on the vvkvs
@@ -175,7 +194,7 @@ end
 
 module RWTimeoutQuorumAgentProtocol
   #include QuorumAgentProtocol
-  
+
   # interface input, :begin_vote, [:ballot_id] => [:num_votes]
   # interface input, :cast_vote, [:ballot_id, :agent, :vote, :note]
   # interface output, :result, [:ballot_id] => [:status, :result,
@@ -192,7 +211,7 @@ module RWTimeoutQuorumAgentProtocol
     interface input, :parameters, [:request] => [:ack_num, :duration]
     interface input, :delete, [:request] => []
     # states are - :success, :fail, :in_progress
-    interface output, :status, [:request] => [:state]   
+    interface output, :status, [:request] => [:state]
   end
 
 end
@@ -209,15 +228,15 @@ module RWTimeoutQuorumAgent
   # Begin vote and set alarm
   bloom do
     voter.begin_vote <= (read * parameters)\
-      .pairs(:request => :request) do |x,p| 
+      .pairs(:request => :request) do |x,p|
       [x.request, p.ack_num]
     end
     voter.begin_vote <= (version_query * parameters)\
-      .pairs(:request => :request) do |x,p| 
+      .pairs(:request => :request) do |x,p|
       [x.request, p.ack_num]
     end
     voter.begin_vote <= (write * parameters)\
-      .pairs(:request => :request) do |x,p| 
+      .pairs(:request => :request) do |x,p|
       [x.request, p.ack_num]
     end
     alarm.set_alarm <= (read * parameters)\
@@ -233,7 +252,7 @@ module RWTimeoutQuorumAgent
       [x.request, p.duration]
     end
   end
-  
+
   # record votes!
   bloom do
     # put acks in cast_vote
@@ -257,10 +276,10 @@ module RWTimeoutQuorumAgent
     status <= voter.result do |r|
       [r.ballot_id, :success] if r.status == :success
     end
-    
+
     alarm.stop_alarm <= vote.result do |r|
       [r.ballot_id] if r.status == :success
     end
-    
+
   end
 end
