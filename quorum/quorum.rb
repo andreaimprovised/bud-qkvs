@@ -35,20 +35,25 @@ module VectorValueMatrixSerializer
 
 end
 
-# Performs read/version/write operations on static members
+# Performs read/version/write operations on a specified agent.
 #
-# Doesn't know about session guarantees 
+# The results of a request on a specific agent will be wholly
+# contained (meaning not split up across timesteps) at some
+# timestep in the future.
 #
-# Write operation must specifiy version vector.  No logic for
-# specifying the proper version vector.
-#
-# acks are asynchronous streams
+# Basically, this module takes care of running an operation
+# on a remote agent and ensuring that the output of that operation
+# is rendered to this ack interface in one piece, and rendered only
+# once on that ack interface.
 module QuorumRemoteProcedureProtocol
 
-  # Request must be unique across all read/version/write operations
-  # Agent is a network identifier
+  # Request MUST be unique across all read/version/write operations
+  # Agent is a network identifier.
 
   state do
+    # Remember key constraint on request
+    # interface input, :make_request, [:request] => []
+
     # Read Operation
     interface input, :read, [:request, :agent] => [:key]
     interface output, :read_ack,  [:request, :agent, :v_vector] => [:value]
@@ -72,6 +77,7 @@ module QuorumRemoteProcedure
 
   state do
     table :pending_request, [:request] => []
+    table :pending_response, [:request] => []
 
     channel :read_request, [:@dst, :src, :request] => [:key]
     channel :read_response, [:dst, :@src, :request] => [:matrix]
@@ -82,6 +88,21 @@ module QuorumRemoteProcedure
     channel :write_response, [:dst, :@src, :request] => []
   end
   
+  # Logic to prevent duplicate delivery of acks!
+  # It is not well known that channels will sometimes deliver messages twice
+  bloom do
+    pending_response <= read { |r| [r.request] }
+    pending_response <= write { |w| [w.request] }
+    pending_response <= version_query { |v| [v.request] }
+
+    pending_response <- (pending_response * read_response)\
+      .pairs(:request => :request)
+    pending_response <- (pending_response * version_response)\
+      .pairs(:request => :request)
+    pending_response <- (pending_response * write_response)\
+      .pairs(:request => :request)
+  end
+
   # Logic to play nice with other users of the vvkvs!
   bloom do
     # Keep track of requests we'll make on the vvkvs
@@ -103,7 +124,8 @@ module QuorumRemoteProcedure
     read_request <~ read do |r|
       [r.agent, ip_port, r.request, r.key]
     end
-    vvms.deserialize <= read_response do |r|
+    vvms.deserialize <= (read_response * pending_response)\
+      .lefts(:request => :request) do |r|
       [[r.request, r.dst], r.matrix]
     end
     read_ack <= vvms.deserialize_ack do |a|
@@ -128,7 +150,8 @@ module QuorumRemoteProcedure
     version_request <~ version_query do |x|
       [x.agent, ip_port, x.request, x.key]
     end
-    vms.deserialize <= version_response do |x|
+    vms.deserialize <= (version_response * pending_response)\
+      .lefts(:request => :request) do |x|
       [[x.request, x.dst], x.v_matrix]
     end
     version_ack <= vms.deserialize_ack do |a|
@@ -153,7 +176,8 @@ module QuorumRemoteProcedure
     write_request <~ write do |w|
       [w.agent, ip_port, w.request, w.key, w.v_vector, w.value]
     end
-    write_ack <= write_response do |w|
+    write_ack <= (write_response * pending_response)\
+      .lefts(:request => :request) do |w|
       [w.request, w.dst]
     end
   end
@@ -257,3 +281,4 @@ module RWTimeoutQuorumAgent
 =end
   end
 end
+
