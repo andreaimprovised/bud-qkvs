@@ -9,15 +9,16 @@ class SessionVoter
   include SessionVoteCounter
 
   bloom do
-#    stdio <~ read_vectors.inspected
-#    stdio <~ write_vector.inspected
+#   stdio <~ read_vectors.inspected
+#   stdio <~ write_vector.inspected
+    stdio <~ output_write_result.inspected
   end
 end
 
 class TestSessionVoting < Test::Unit::TestCase
 
   def wait
-    5.times do
+    2.times do
       @voter.tick
     end
   end
@@ -68,16 +69,16 @@ class TestSessionVoting < Test::Unit::TestCase
 
   def test_writes_follow_reads_sanity
     p 'test_writes_follow_reads_sanity'
-    @voter.init_request <+ [[0, [:RYW], [['a', 0]], ['a', 1]]]
+    @voter.init_request <+ [[0, [:WFR], [['a', 0]], ['a', 1]]]
     wait
-    assert(@voter.output_read_result.include?([0, ['a', 0]]))
+    assert(@voter.output_write_result.include?([0, ['a', 0]]))
   end
 
   def test_monotonic_writes_sanity
     p 'test_monotonic_writes_sanity'
     @voter.init_request <+ [[0, [:MW], [['a', 0]], ['a', 1]]]
     wait
-    assert(@voter.output_read_result.include?([0, ['a', 1]]))
+    assert(@voter.output_write_result.include?([0, ['a', 1]]))
   end
 
 end
