@@ -171,3 +171,89 @@ module QuorumRemoteProcedure
 
 end
 
+module RWTimeoutQuorumAgentProtocol
+  include QuorumAgentProtocol
+  
+  # interface input, :begin_vote, [:ballot_id] => [:num_votes]
+  # interface input, :cast_vote, [:ballot_id, :agent, :vote, :note]
+  # interface output, :result, [:ballot_id] => [:status, :result,
+  #                                             :votes, :notes
+
+  # interface input, :set_alarm, [:ident] => [:duration]
+  # interface input, :stop_alarm, [:ident] => []
+  # interface output, :alarm, [:ident] => []
+
+  state do
+    # Parameter Input and Status Output
+    # ack_size is the number of acks to wait for to declare victory
+    # duration is the time in units of 0.1s to wait until failure
+    interface input, :parameters, [:request] => [:ack_num, :duration]
+    interface input, :delete, [:request] => []
+    # states are - :success, :fail, :in_progress
+    interface output, :status, [:request] => [:state]   
+  end
+
+end
+
+module RWTimeoutQuorumAgent
+  import Alarm => :alarm
+  import VoteCounter => :voter
+  import QuorumAgent => :qa
+
+  state do
+    table :acks, [:request] => [:src]
+  end
+
+  # Begin vote and set alarm
+  bloom do
+    voter.begin_vote <= (read * parameters)\
+      .pairs(:request => :request) do |x,p| 
+      [x.request, p.ack_num]
+    end
+    voter.begin_vote <= (version_query * parameters)\
+      .pairs(:request => :request) do |x,p| 
+      [x.request, p.ack_num]
+    end
+    voter.begin_vote <= (write * parameters)\
+      .pairs(:request => :request) do |x,p| 
+      [x.request, p.ack_num]
+    end
+    alarm.set_alarm <= (read * parameters)\
+      .pairs(:request => :request) do |x,p|
+      [x.request, p.duration]
+    end
+    alarm.set_alarm <= (version_query * parameters)\
+      .pairs(:request => :request) do |x,p|
+      [x.request, p.duration]
+    end
+    alarm.set_alarm <= (write * parameters)\
+      .pairs(:request => :request) do |x,p|
+      [x.request, p.duration]
+    end
+  end
+  
+  # record votes!
+  bloom do
+    # put acks in cast_vote
+    voter.cast_vote <= qa.read_response {|rr| [rr.request, rr.src, "ack", "no note"]}
+    voter.cast_vote <= qa.version_response {|vr| [vr.request, vr.src, "ack", "no note"]}
+    voter.cast_vote <= qa.write_response {|wr| [wr.request, wr.src, "ack", "no note"]}
+  end
+
+  bloom do
+     # timer runs out, vote fails, output error
+    status <= (alarm.alarm * voter.result).pairs(:ident=>:ballot_id) do |l,r|
+      [l.ident, :fail] if r.status == :fail
+    end
+    # timer runs out, vote succeeds, output success
+    status <= (alarm.alarm * voter.result).pairs(:ident=>:ballot_id) do |l,r|
+      [l.ident, :success] if r.status == :success
+    end
+
+    # vote successful, timer still going, clear timer: output success
+=begin
+    status <= vote.result do |r|
+      [r.ballot_id, :success] if 
+=end
+  end
+end

@@ -79,6 +79,14 @@ module SessionVoteCounter
   end
 
   bloom :output_read_results do
+    output_read_result <= (aggregate_vectors.minimal_matrix * pending_reads).pairs(
+      :reqid => :reqid, :v_vector => :v_vector) do |min,reads|
+      [min.reqid, min.v_vector, reads.value]
+    end
+    output_read_result <= (aggregate_vectors.minimal_matrix * read_vector).pairs(
+      :reqid => :reqid) do |min,read_vec|
+      [min.reqid, read_vec.v_vector, nil]
+    end
   end
 
   bloom :output_write_results do
