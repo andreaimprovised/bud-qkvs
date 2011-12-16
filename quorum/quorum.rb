@@ -1,6 +1,6 @@
 require 'rubygems'
 require 'bud'
-require 'quorum/membership'
+require 'membership/membership'
 require 'causality/version_vector'
 require 'vote/voting'
 require 'alarm/alarm'
