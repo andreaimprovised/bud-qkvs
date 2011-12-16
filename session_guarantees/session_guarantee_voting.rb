@@ -1,5 +1,8 @@
 require 'rubygems'
 require 'bud'
+require 'backports'
+
+require "causality/version_vector"
 
 # @abstract this module will be used in a QuorumKVS as a 'voting' module
 # to pass read and write results to. When enough enough read or write
@@ -40,9 +43,6 @@ module SessionVoteCounterProtocol
     # @param [Object] reqid the unique id of the request
     interface input, :end_request, [:reqid]
 
-    # NOTE if consistently outputing is a performance concern, make it
-    # only output on end_request.
-
     # The stream of read results that satisfy all session guarantees.
     # There is either a single maximum result, or a number of maxmimal
     # results that occur concurrently.
@@ -53,21 +53,24 @@ module SessionVoteCounterProtocol
     # The streamed write result that satisfies all session guarantees.
     # @param [Object] reqid the unique id for the request
     interface output, :output_write_result, [:reqid] => [:v_vector]
+
+    # NOTE if consistently outputing is a performance concern, make it
+    # only output on end_request.
   end
 end
 
 # This module provides an implementation of the SessionVoteCounterProtocol.
 module SessionVoteCounter
   include SessionVoteCounterProtocol
-  require VersionVectorMerge => :vector_merger
-  require VersionVectorConcurrency => :vector_aggregator
-  require VersionMatrixSerializer => :matrix_serializer
+  import VersionVectorMerge => :vector_merger
+  import VersionVectorConcurrency => :vector_aggregator
+  import VersionMatrixSerializer => :matrix_serializer
 
   state do
     # Per-reqid set of vectors indicating the read set of the request.
-    table :read_vectors, [:reqid, :vector]
+    table :read_vectors, [:reqid, :v_vector]
     # Per-reqid vector indicating the write set of the request.
-    table :write_vector, [:reqid] => [:vector]
+    table :write_vector, [:reqid] => [:v_vector]
     # Per-reqid list of requested session guarantees.
     table :session_guarantees, [:reqid] => [:session_types]
     # Table of all read results passed in.
@@ -76,6 +79,8 @@ module SessionVoteCounter
     table :pending_writes, add_write.schema
     # Temporary collection of non-read_vector read results.
     scratch :pre_read_results, output_read_result.schema
+    # Temporary collection of aggregated read vectors.
+    scratch :max_vectors, vector_aggregator.minimal_matrix.schema
   end
 
   bloom :init_session do
@@ -83,7 +88,7 @@ module SessionVoteCounter
     session_guarantees <= init_request {|init| [init.reqid, init.session_types]}
     # De-serialize and init read vectors.
     matrix_serializer.deserialize <= init_request {|init| init.read_vectors }
-    read_vector <= matrix_serializer.deserialize_ack
+    read_vectors <= matrix_serializer.deserialize_ack
     # Set write vector.
     write_vector <= init_request {|init| init.write_vector }
   end
@@ -102,7 +107,7 @@ module SessionVoteCounter
     end
     # Add write vectors to aggregate for read your writes.
     vector_aggregator.version_matrix <= (session_guarantees * \
-          write_vectors).matches do |guarantees, vector|
+          write_vector).matches do |guarantees, vector|
       vector if guarantees.session_types.include? :RYW
     end
   end
@@ -121,20 +126,21 @@ module SessionVoteCounter
     end
     # Add write vectors to merge for read your writes.
     vector_merger.version_matrix <= (session_guarantees * \
-          write_vectors).pairs(:reqid => :reqid) do |guarantees, vector|
+          write_vector).pairs(:reqid => :reqid) do |guarantees, vector|
       vector if guarantees.session_types.include? :MW
     end
   end
 
   bloom :output_read_results do
+    max_vectors <= vector_aggregator.minimal_matrix
     # Get all non-read_vector results.
-    pre_read_result <= (vector_aggregator.minimal_matrix * \
-          pending_reads).matches do |min,reads|
+    pre_read_results <= (max_vectors * pending_reads).pairs( \
+          :request => :reqid, :v_vector => :v_vector) do |min,reads|
       [min.reqid, min.v_vector, reads.value]
     end
     # Add the read_vector result if the results exist.
-    output_read_result <= (vector_aggregator.minimal_matrix * \
-          read_vector).pairs(:reqid => :reqid) do |min,read_vec|
+    output_read_result <= (max_vectors * read_vectors).pairs( \
+          :request => :reqid) do |min,read_vec|
       [min.reqid, read_vec.v_vector, nil] if pre_read_results.include? min.reqid
     end
   end
@@ -146,11 +152,11 @@ module SessionVoteCounter
 
   # Remove requests that have been cleared.
   bloom :cleanup_results do
-    read_vectors <+ read_vectors.notin(end_requests, :reqid => :reqid)
-    write_vectors <+ write_vectors.notin(end_requests, :reqid => :reqid)
-    session_guarantees <+ session_guarantees.notin(end_requests, :reqid => :reqid)
-    pending_reads <+ pending_reads.notin(end_requests, :reqid => :reqid)
-    pending_writes <+ pending_writes.notin(end_requests, :reqid => :reqid)
+    read_vectors <+ read_vectors.notin(end_request, :reqid => :reqid)
+    write_vector <+ write_vector.notin(end_request, :reqid => :reqid)
+    session_guarantees <+ session_guarantees.notin(end_request, :reqid => :reqid)
+    pending_reads <+ pending_reads.notin(end_request, :reqid => :reqid)
+    pending_writes <+ pending_writes.notin(end_request, :reqid => :reqid)
   end
 
 end
