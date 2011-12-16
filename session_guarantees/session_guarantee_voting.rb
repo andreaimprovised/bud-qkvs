@@ -53,6 +53,7 @@ module SessionVoteCounterProtocol
   end
 end
 
+# This module provides an implementation of the SessionVoteCounterProtocol.
 module SessionVoteCounter
   include SessionVoteCounterProtocol
   require VersionVectorMerge => :vector_merger
@@ -60,14 +61,18 @@ module SessionVoteCounter
   require VersionMatrixSerializer => :matrix_serializer
 
   state do
+    # Per-reqid set of vectors indicating the read set of the request.
     table :read_vectors, [:reqid, :vector]
+    # Per-reqid vector indicating the write set of the request.
     table :write_vector, [:reqid] => [:vector]
-    # reqid => list of guarantees.
-    table :session_guarantees, [:reqid, :session_types]
-
+    # Per-reqid list of requested session guarantees.
+    table :session_guarantees, [:reqid] => [:session_types]
+    # Table of all read results passed in.
     table :pending_reads, vote_read.schema
+    # Table of all write results passed in.
     table :pending_writes, vote_write.schema
-    scratch :read_results, output_read_result.schema
+    # Temporary collection of non-read_vector read results.
+    scratch :pre_read_results, output_read_result.schema
   end
 
   bloom :init_session do
@@ -116,13 +121,13 @@ module SessionVoteCounter
   end
 
   bloom :output_read_results do
-    output_read_result <= (vector_aggregator.minimal_matrix * pending_reads).pairs(
+    pre_read_result <= (vector_aggregator.minimal_matrix * pending_reads).pairs(
       :reqid => :reqid, :v_vector => :v_vector) do |min,reads|
       [min.reqid, min.v_vector, reads.value]
     end
     output_read_result <= (vector_aggregator.minimal_matrix * read_vector).pairs(
       :reqid => :reqid) do |min,read_vec|
-      [min.reqid, read_vec.v_vector, nil]
+      [min.reqid, read_vec.v_vector, nil] if pre_read_results.include? min.reqid
     end
   end
 
