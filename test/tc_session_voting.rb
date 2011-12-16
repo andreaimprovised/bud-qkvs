@@ -11,7 +11,7 @@ class SessionVoter
   bloom do
 #   stdio <~ read_vectors.inspected
 #   stdio <~ write_vector.inspected
-    stdio <~ output_write_result.inspected
+#   stdio <~ output_write_result.inspected
   end
 end
 
