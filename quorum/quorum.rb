@@ -2,6 +2,8 @@ require 'rubygems'
 require 'bud'
 require 'quorum/membership'
 require 'causality/version_vector'
+require 'vote/voting'
+require 'alarm/alarm'
 
 
 # Serializes several (vector, value) pairs into one field
@@ -172,7 +174,7 @@ module QuorumRemoteProcedure
 end
 
 module RWTimeoutQuorumAgentProtocol
-  include QuorumAgentProtocol
+  #include QuorumAgentProtocol
   
   # interface input, :begin_vote, [:ballot_id] => [:num_votes]
   # interface input, :cast_vote, [:ballot_id, :agent, :vote, :note]
@@ -197,8 +199,8 @@ end
 
 module RWTimeoutQuorumAgent
   import Alarm => :alarm
-  import VoteCounter => :voter
-  import QuorumAgent => :qa
+  import CountVoteCounter => :voter
+  #import QuorumAgent => :qa
 
   state do
     table :acks, [:request] => [:src]
@@ -240,6 +242,7 @@ module RWTimeoutQuorumAgent
     voter.cast_vote <= qa.write_response {|wr| [wr.request, wr.src, "ack", "no note"]}
   end
 
+  # handling results and timeouts
   bloom do
      # timer runs out, vote fails, output error
     status <= (alarm.alarm * voter.result).pairs(:ident=>:ballot_id) do |l,r|
@@ -251,9 +254,13 @@ module RWTimeoutQuorumAgent
     end
 
     # vote successful, timer still going, clear timer: output success
-=begin
-    status <= vote.result do |r|
-      [r.ballot_id, :success] if 
-=end
+    status <= voter.result do |r|
+      [r.ballot_id, :success] if r.status == :success
+    end
+    
+    alarm.stop_alarm <= vote.result do |r|
+      [r.ballot_id] if r.status == :success
+    end
+    
   end
 end
