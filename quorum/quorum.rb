@@ -2,6 +2,8 @@ require 'rubygems'
 require 'bud'
 require 'quorum/membership'
 require 'causality/version_vector'
+require 'vote/voting'
+require 'alarm/alarm'
 
 
 # Serializes several (vector, value) pairs into one field
@@ -172,7 +174,7 @@ module QuorumRemoteProcedure
 end
 
 module RWTimeoutQuorumAgentProtocol
-  include QuorumAgentProtocol
+  #include QuorumAgentProtocol
   
   # interface input, :begin_vote, [:ballot_id] => [:num_votes]
   # interface input, :cast_vote, [:ballot_id, :agent, :vote, :note]
@@ -197,8 +199,8 @@ end
 
 module RWTimeoutQuorumAgent
   import Alarm => :alarm
-  import VoteCounter => :voter
-  import QuorumAgent => :qa
+  import CountVoteCounter => :voter
+  #import QuorumAgent => :qa
 
   state do
     table :acks, [:request] => [:src]
