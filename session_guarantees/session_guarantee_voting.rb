@@ -79,6 +79,8 @@ module SessionVoteCounter
     table :pending_writes, add_write.schema
     # Temporary collection of non-read_vector read results.
     scratch :pre_read_results, output_read_result.schema
+    # Temporary collection of requests with existing read results.
+    scratch :non_empty_reads, [:reqid]
     # Temporary collection of aggregated read vectors.
     scratch :max_vectors, vector_aggregator.minimal_matrix.schema
   end
@@ -140,10 +142,11 @@ module SessionVoteCounter
           :request => :reqid, :v_vector => :v_vector) do |max,reads|
       [max.request, max.v_vector, reads.value]
     end
+    non_empty_reads <= pre_read_results {|result| result.reqid }
     # Add the read_vector result if the results exist.
     output_read_result <= (max_vectors * read_vectors).pairs( \
           :request => :reqid) do |max,read_vec|
-      [max.request, read_vec.v_vector, nil] if pre_read_results.include? max.reqid
+      [max.request, read_vec.v_vector, nil] if non_empty_reads.include?([max.reqid])
     end
   end
 
