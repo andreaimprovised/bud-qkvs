@@ -9,8 +9,9 @@ class SessionVoter
   include SessionVoteCounter
 
   bloom do
-#    stdio <~ read_vectors.inspected
-#    stdio <~ write_vector.inspected
+#   stdio <~ read_vectors.inspected
+#   stdio <~ write_vector.inspected
+#   stdio <~ output_write_result.inspected
   end
 end
 
@@ -23,7 +24,7 @@ class TestSessionVoting < Test::Unit::TestCase
   end
 
   def init_dummy_request
-    @voter.init_request <+ [[0, [:foo, :bar], [['a', 0], ['b', 1]], ['a', 1]]]
+    @voter.init_request <+ [[0, [:foo, :bar], [[['a', 0]], [['b', 1]]], [['a', 1]]]]
   end
 
   def setup
@@ -41,43 +42,43 @@ class TestSessionVoting < Test::Unit::TestCase
     p 'test_init_read_vectors'
     init_dummy_request
     wait
-    assert(@voter.read_vectors.include?([0, ['a', 0]]))
-    assert(@voter.read_vectors.include?([0, ['b', 1]]))
+    assert(@voter.read_vectors.include?([0, [['a', 0]]]))
+    assert(@voter.read_vectors.include?([0, [['b', 1]]]))
   end
 
   def test_init_write_vector
     p 'test_init_write_vectors'
     init_dummy_request
     wait
-    assert(@voter.write_vector.include?([0, ['a', 1]]))
+    assert(@voter.write_vector.include?([0, [['a', 1]]]))
   end
 
   def test_monotonic_reads_sanity
     p 'test_monotonic_reads_sanity'
-    @voter.init_request <+ [[0, [:MR], [['a', 0]], ['a', 1]]]
+    @voter.init_request <+ [[0, [:MR], [[['a', 0]]], [['a', 1]]]]
     wait
     assert(@voter.output_read_result.empty?)
   end
 
   def test_read_your_writes_sanity
     p 'test_read_your_writes_sanity'
-    @voter.init_request <+ [[0, [:RYW], [['a', 0]], ['a', 1]]]
+    @voter.init_request <+ [[0, [:RYW], [[['a', 0]]], [['a', 1]]]]
     wait
     assert(@voter.output_read_result.empty?)
   end
 
   def test_writes_follow_reads_sanity
     p 'test_writes_follow_reads_sanity'
-    @voter.init_request <+ [[0, [:RYW], [['a', 0]], ['a', 1]]]
+    @voter.init_request <+ [[0, [:WFR], [[['a', 0]]], [['a', 1]]]]
     wait
-    assert(@voter.output_read_result.include?([0, ['a', 0]]))
+    assert(@voter.output_write_result.include?([0, [['a', 0]]]))
   end
 
   def test_monotonic_writes_sanity
     p 'test_monotonic_writes_sanity'
-    @voter.init_request <+ [[0, [:MW], [['a', 0]], ['a', 1]]]
+    @voter.init_request <+ [[0, [:MW], [['a', 0]], [['a', 1]]]]
     wait
-    assert(@voter.output_read_result.include?([0, ['a', 1]]))
+    assert(@voter.output_write_result.include?([0, [['a', 1]]]))
   end
 
 end
