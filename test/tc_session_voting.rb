@@ -54,34 +54,6 @@ class TestSessionVoting < Test::Unit::TestCase
     assert(@voter.write_vector.include?([0, [['a', 1]]]))
   end
 
-  def test_monotonic_reads_empty
-    p 'test_monotonic_reads_empty'
-    @voter.init_request <+ [[0, [:MR], [[['a', 0]]], [['a', 1]]]]
-    wait
-    assert(@voter.output_read_result.empty?)
-  end
-
-  def test_read_your_writes_empty
-    p 'test_read_your_writes_empty'
-    @voter.init_request <+ [[0, [:RYW], [[['a', 0]]], [['a', 1]]]]
-    wait
-    assert(@voter.output_read_result.empty?)
-  end
-
-  def test_writes_follow_reads_empty
-    p 'test_writes_follow_reads_empty'
-    @voter.init_request <+ [[0, [:WFR], [[['a', 0]]], [['a', 1]]]]
-    wait
-    assert(@voter.output_write_result.include?([0, [['a', 0]]]))
-  end
-
-  def test_monotonic_writes_empty
-    p 'test_monotonic_writes_empty'
-    @voter.init_request <+ [[0, [:MW], [['a', 0]], [['a', 1]]]]
-    wait
-    assert(@voter.output_write_result.include?([0, [['a', 1]]]))
-  end
-
   def test_read_simple
     p 'test_read_simple'
     @voter.init_request <+ [[0, [], [[]], []]]
@@ -140,6 +112,34 @@ class TestSessionVoting < Test::Unit::TestCase
     @voter.add_write <+ [[0, [['b', 2]]]]
     wait
     assert(@voter.output_write_result.include?([0, [['a', 1], ['b', 2]]]))
+  end
+
+  def test_monotonic_reads_empty
+    p 'test_monotonic_reads_empty'
+    @voter.init_request <+ [[0, [:MR], [[['a', 0]]], [['a', 1]]]]
+    wait
+    assert(@voter.output_read_result.empty?)
+  end
+
+  def test_read_your_writes_empty
+    p 'test_read_your_writes_empty'
+    @voter.init_request <+ [[0, [:RYW], [[['a', 0]]], [['a', 1]]]]
+    wait
+    assert(@voter.output_read_result.empty?)
+  end
+
+  def test_writes_follow_reads_empty
+    p 'test_writes_follow_reads_empty'
+    @voter.init_request <+ [[0, [:WFR], [[['a', 0]]], [['a', 1]]]]
+    wait
+    assert(@voter.output_write_result.include?([0, [['a', 0]]]))
+  end
+
+  def test_monotonic_writes_empty
+    p 'test_monotonic_writes_empty'
+    @voter.init_request <+ [[0, [:MW], [['a', 0]], [['a', 1]]]]
+    wait
+    assert(@voter.output_write_result.include?([0, [['a', 1]]]))
   end
 
 end
