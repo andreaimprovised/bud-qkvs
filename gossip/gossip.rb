@@ -1,6 +1,5 @@
 require 'rubygems'
 require 'bud'
-require 'sequences'
 
 # This module supports the gossiping of messages and members, specifically each node will randomly choose
 # a subset of its known members and resend out the messages and members they have not seen yet.
@@ -50,7 +49,7 @@ module GossipProtocol
     members_to_send <= unchosen_members { |x| x if (rand(10) < 2) }
     members_to_send <= chosen_member { |x| [x.host] }
     # send all the messages to the chosen members
-    sent_messages <= (messages_to_send * members_to_send).pairs { |l, r|
+    sent_messages <= (messages_to_send  * members_to_send).combos { |l, r|
       if r.host != ip_port
         [r.host, l.from, l.msg_type, l.msgid, l.message]
       end

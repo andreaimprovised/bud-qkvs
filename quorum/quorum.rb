@@ -1,6 +1,6 @@
 require 'rubygems'
 require 'bud'
-require 'quorum/membership'
+require 'membership/membership'
 require 'causality/version_vector'
 require 'vote/voting'
 require 'alarm/alarm'
@@ -37,20 +37,25 @@ module VectorValueMatrixSerializer
 
 end
 
-# Performs read/version/write operations on static members
+# Performs read/version/write operations on a specified agent.
 #
-# Doesn't know about session guarantees 
+# The results of a request on a specific agent will be wholly
+# contained (meaning not split up across timesteps) at some
+# timestep in the future.
 #
-# Write operation must specifiy version vector.  No logic for
-# specifying the proper version vector.
-#
-# acks are asynchronous streams
+# Basically, this module takes care of running an operation
+# on a remote agent and ensuring that the output of that operation
+# is rendered to this ack interface in one piece, and rendered only
+# once on that ack interface.
 module QuorumRemoteProcedureProtocol
 
-  # Request must be unique across all read/version/write operations
-  # Agent is a network identifier
+  # Request MUST be unique across all read/version/write operations
+  # Agent is a network identifier.
 
   state do
+    # Remember key constraint on request
+    # interface input, :make_request, [:request] => []
+
     # Read Operation
     interface input, :read, [:request, :agent] => [:key]
     interface output, :read_ack,  [:request, :agent, :v_vector] => [:value]
@@ -74,6 +79,7 @@ module QuorumRemoteProcedure
 
   state do
     table :pending_request, [:request] => []
+    table :pending_response, [:request] => []
 
     channel :read_request, [:@dst, :src, :request] => [:key]
     channel :read_response, [:dst, :@src, :request] => [:matrix]
@@ -84,6 +90,21 @@ module QuorumRemoteProcedure
     channel :write_response, [:dst, :@src, :request] => []
   end
   
+  # Logic to prevent duplicate delivery of acks!
+  # It is not well known that channels will sometimes deliver messages twice
+  bloom do
+    pending_response <= read { |r| [r.request] }
+    pending_response <= write { |w| [w.request] }
+    pending_response <= version_query { |v| [v.request] }
+
+    pending_response <- (pending_response * read_response)\
+      .pairs(:request => :request)
+    pending_response <- (pending_response * version_response)\
+      .pairs(:request => :request)
+    pending_response <- (pending_response * write_response)\
+      .pairs(:request => :request)
+  end
+
   # Logic to play nice with other users of the vvkvs!
   bloom do
     # Keep track of requests we'll make on the vvkvs
@@ -105,7 +126,8 @@ module QuorumRemoteProcedure
     read_request <~ read do |r|
       [r.agent, ip_port, r.request, r.key]
     end
-    vvms.deserialize <= read_response do |r|
+    vvms.deserialize <= (read_response * pending_response)\
+      .lefts(:request => :request) do |r|
       [[r.request, r.dst], r.matrix]
     end
     read_ack <= vvms.deserialize_ack do |a|
@@ -130,7 +152,8 @@ module QuorumRemoteProcedure
     version_request <~ version_query do |x|
       [x.agent, ip_port, x.request, x.key]
     end
-    vms.deserialize <= version_response do |x|
+    vms.deserialize <= (version_response * pending_response)\
+      .lefts(:request => :request) do |x|
       [[x.request, x.dst], x.v_matrix]
     end
     version_ack <= vms.deserialize_ack do |a|
@@ -155,7 +178,8 @@ module QuorumRemoteProcedure
     write_request <~ write do |w|
       [w.agent, ip_port, w.request, w.key, w.v_vector, w.value]
     end
-    write_ack <= write_response do |w|
+    write_ack <= (write_response * pending_response)\
+      .lefts(:request => :request) do |w|
       [w.request, w.dst]
     end
   end
@@ -174,72 +198,94 @@ module QuorumRemoteProcedure
 end
 
 module RWTimeoutQuorumAgentProtocol
-  #include QuorumAgentProtocol
-  
-  # interface input, :begin_vote, [:ballot_id] => [:num_votes]
-  # interface input, :cast_vote, [:ballot_id, :agent, :vote, :note]
-  # interface output, :result, [:ballot_id] => [:status, :result,
-  #                                             :votes, :notes
-
-  # interface input, :set_alarm, [:ident] => [:duration]
-  # interface input, :stop_alarm, [:ident] => []
-  # interface output, :alarm, [:ident] => []
-
   state do
-    # Parameter Input and Status Output
-    # ack_size is the number of acks to wait for to declare victory
+    interface input, :get, [:request] => [:key]
+    interface input, :put, [:request] => [:key, :value]
+    interface input, :get_version [:request] => [:key]
+
+    # ack_num is number of acks to wait for to declare victory
     # duration is the time in units of 0.1s to wait until failure
     interface input, :parameters, [:request] => [:ack_num, :duration]
-    interface input, :delete, [:request] => []
+
     # states are - :success, :fail, :in_progress
-    interface output, :status, [:request] => [:state]   
+    # NOTE: output responses do not persist after fail or success is reached
+    interface output, :status, [:request] => [:state]
+    interface output, :get_responses, [:request, :agent, :v_vector] => [:value]
+    interface output, :put_responses, [:request, :agent] => []
+    interface output, :version_responses, [:request, :agent, :v_vector] => []
   end
 
 end
 
 module RWTimeoutQuorumAgent
+  include RWTimeoutQuorumAgentProtocol
+  include StaticMembership
   import Alarm => :alarm
   import CountVoteCounter => :voter
-  #import QuorumAgent => :qa
+  import QuorumRemoteProcedure => :rp
 
   state do
-    table :acks, [:request] => [:src]
+    table :read_acks [:request, :agent, :v_vector] => [:value]
+    table :version_acks [:request, :agent, :v_vector] => []
+    table :write_acks [:request, :agent]
+    table :num_Agents [:host] => [:cnt]
+    
+    # cached puts that are still waiting for version queries
+    table :pending_puts [:request] => [:key, :value]
+    # puts that have an updated version vector, and synchronized values
+    table :ready_puts [:request] => [:key, :v_vector, :value]
   end
 
-  # Begin vote and set alarm
+  # MISC Logic block
+  state do
+    # count members
+    num_Agents <= member.group([:host], count(:host))
+    # cache put requests
+    pending_puts <= put
+  end
+
+  # setup num candidates, set voting paramters, begin vote and set alarm
   bloom do
-    voter.begin_vote <= (read * parameters)\
+    voter.num_required <= (get * parameters)\
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
     end
-    voter.begin_vote <= (version_query * parameters)\
+    voter.num_required <= (get_version * parameters)\
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
     end
-    voter.begin_vote <= (write * parameters)\
+    voter.num_required <= (put * parameters)\
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
     end
-    alarm.set_alarm <= (read * parameters)\
+    alarm.set_alarm <= (get * parameters)\
       .pairs(:request => :request) do |x,p|
       [x.request, p.duration]
     end
-    alarm.set_alarm <= (version_query * parameters)\
+    alarm.set_alarm <= (get_version * parameters)\
       .pairs(:request => :request) do |x,p|
       [x.request, p.duration]
     end
-    alarm.set_alarm <= (write * parameters)\
+    alarm.set_alarm <= (put * parameters)\
       .pairs(:request => :request) do |x,p|
       [x.request, p.duration]
     end
   end
-  
-  # record votes!
+
+  # invoke remote procedures
+  bloom do
+    rp.read <= (get * member).pairs {|g,m| [g.request, m.host, g.key]}
+    rp.version_query <= (get_version * member).pairs {|g,m| [g.request, m.host, g.key]}
+    rp.write <= (ready_puts * member).pairs {|p,m| [p.request, m.host, p.key, p.v_vector, p.value]}
+  end
+
+  # collect remote procedure return values, record votes!
   bloom do
     # put acks in cast_vote
-    voter.cast_vote <= qa.read_response {|rr| [rr.request, rr.src, "ack", "no note"]}
-    voter.cast_vote <= qa.version_response {|vr| [vr.request, vr.src, "ack", "no note"]}
-    voter.cast_vote <= qa.write_response {|wr| [wr.request, wr.src, "ack", "no note"]}
+    voter.cast_vote <= rp.read_response {|rr| [rr.request, rr.src, "ack", "read ack"]}
+    voter.cast_vote <= rp.version_response {|vr| [vr.request, vr.src, "ack", "version ack"]}
+    voter.cast_vote <= rp.write_response {|wr| [wr.request, wr.src, "ack", "write ack"]}
+    # cache remote procedure return values
   end
 
   # handling results and timeouts
@@ -264,3 +310,4 @@ module RWTimeoutQuorumAgent
     
   end
 end
+

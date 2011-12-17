@@ -31,13 +31,13 @@ module SessionVoteCounterProtocol
     #     value
     # @param [Object] reqid a unique id for the request
     # @param [Object] value the value read from the KVS.
-    interface input, :add_read, [:v_vector, :reqid] => [:value]
+    interface input, :add_read, [:reqid, :v_vector] => [:value]
 
     # Adds a 'vote' of a write result from a Quorum node.
     # @param [VersionVector] v_vector the version vector for the written
     #     value
     # @param [Object] reqid a unique id for the request
-    interface input, :add_write, [:v_vector, :reqid]
+    interface input, :add_write, [:reqid, :v_vector]
 
     # Signals to the module that the request is finished.
     # @param [Object] reqid the unique id of the request
@@ -81,6 +81,10 @@ module SessionVoteCounter
     scratch :pre_read_results, output_read_result.schema
     # Temporary collection of aggregated read vectors.
     scratch :max_vectors, vector_aggregator.minimal_matrix.schema
+    # max_vectors that do not satisfy the read session guarantee.
+    scratch :failed_vectors, max_vectors.schema
+    # Temporary collection of requests with existing read results.
+    scratch :failed_requests, [:reqid]
   end
 
   bloom :init_session do
@@ -117,7 +121,7 @@ module SessionVoteCounter
   bloom :merge_write_votes do
     pending_writes <= add_write
     # vector_merger will merge all write vectors into a total max vector.
-    vector_merger.version_matrix <= add_write {|w| [w.reqid, w.v_vector]}
+    vector_merger.version_matrix <= pending_writes {|w| [w.reqid, w.v_vector]}
   end
 
   bloom :handle_write_session_guarantees do
@@ -128,23 +132,24 @@ module SessionVoteCounter
     end
     # Add write vectors to merge for read your writes.
     vector_merger.version_matrix <= (session_guarantees * \
-          write_vector).pairs(:reqid => :reqid) do |guarantees, vector|
+          write_vector).matches do |guarantees, vector|
       vector if guarantees.session_types.include? :MW
     end
   end
 
   bloom :output_read_results do
     max_vectors <= vector_aggregator.minimal_matrix
-    # Get all non-read_vector results.
+    # Get all matching results that were actually passed in as reads.
     pre_read_results <= (max_vectors * pending_reads).pairs( \
-          :request => :reqid, :v_vector => :v_vector) do |min,reads|
-      [min.reqid, min.v_vector, reads.value]
+          :request => :reqid, :v_vector => :v_vector) do |max,reads|
+      [max.request, max.v_vector, reads.value]
     end
-    # Add the read_vector result if the results exist.
-    output_read_result <= (max_vectors * read_vectors).pairs( \
-          :request => :reqid) do |min,read_vec|
-      [min.reqid, read_vec.v_vector, nil] if pre_read_results.include? min.reqid
-    end
+    # Get all max_vectors that didn't have matching result.
+    failed_vectors <= max_vectors.notin(pre_read_results, :request => :reqid)
+    # Note all requests without matching results as failed.
+    failed_requests <= failed_vectors {|result| [result.reqid] }
+    # Output all successful results.
+    output_read_result <= pre_read_results.notin(failed_requests, :reqid => :reqid)
   end
 
   bloom :output_write_results do
