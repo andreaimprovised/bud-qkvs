@@ -32,6 +32,7 @@ module SessionQuorumKVSClient
     table :sessions, [:session_id] => [:session_types]
     table :read_vectors, [:session_id] => [:read_vector]
     table :write_vectors, [:session_id] => [:write_vector]
+    table :reqid_session_map, [:reqid] => [:session_id]
     scratch :chosen_create_session_req, [] => [:reqid, :session_types]
   end
 
@@ -41,6 +42,7 @@ module SessionQuorumKVSClient
     session_response <= chosen_create_session_req { |a| [a[0], @budtime] }
     read_vectors <= chosen_create_session_req {|a| [@budtime, []]}
     write_vectors <= chosen_create_session_req {|a| [@budtime, []]}
+    reqid_session_map <= chosen_create_session_req {|a| [a[0], @budtime]}
   end
 
   bloom :request_read do
@@ -64,6 +66,9 @@ module SessionQuorumKVSClient
 
   bloom :respond_to_write do
     kvputdel_response <= kvwrite_response{|r| [r.reqid]}
+    write_vectors <+- (reqid_session_map * kvwrite_response).pairs(:reqid => :reqid) do |s, w|
+      [s.session_id, w.write_vector]
+    end
   end
 
   bloom :respond_to_read do
