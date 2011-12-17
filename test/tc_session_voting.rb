@@ -12,13 +12,14 @@ class SessionVoter
 #   stdio <~ read_vectors.inspected
 #   stdio <~ write_vector.inspected
 #   stdio <~ output_write_result.inspected
+   stdio <~ output_read_result.inspected
   end
 end
 
 class TestSessionVoting < Test::Unit::TestCase
 
   def wait
-    5.times do
+    2.times do
       @voter.tick
     end
   end
@@ -81,12 +82,34 @@ class TestSessionVoting < Test::Unit::TestCase
     assert(@voter.output_write_result.include?([0, [['a', 1]]]))
   end
 
-  def test_read
-    p 'test_read'
+  def test_read_simple
+    p 'test_read_simple'
     @voter.init_request <+ [[0, [], [[]], []]]
     wait
-    @voter.add_read <+ [[[['a', 1]], 0, 'VALUEA1']]
+    @voter.add_read <+ [[0, [['a', 1]], 'VALUEA1']]
     wait
+    assert(@voter.output_read_result.include?([0, [['a', 1]], 'VALUEA1']))
+  end
+
+  def test_read_domination
+    p 'test_read_domination'
+    @voter.init_request <+ [[0, [], [[]], []]]
+    wait
+    @voter.add_read <+ [[0, [['a', 1]], 'VALUEA1']]
+    @voter.add_read <+ [[0, [['a', 2]], 'VALUEA2']]
+    wait
+    assert(@voter.output_read_result.include?([0, [['a', 2]], 'VALUEA2']))
+  end
+
+  def test_read_conflict
+    p 'test_read_conflict'
+    @voter.init_request <+ [[0, [], [[]], []]]
+    wait
+    @voter.add_read <+ [[0, [['a', 1]], 'VALUEA1']]
+    @voter.add_read <+ [[0, [['b', 2]], 'VALUEA2']]
+    wait
+    assert(@voter.output_read_result.include?([0, [['a', 1]], 'VALUEA1']))
+    assert(@voter.output_read_result.include?([0, [['b', 2]], 'VALUEA2']))
   end
 
 end
