@@ -7,7 +7,8 @@ require 'alarm/alarm'
 require 'read_repair/read_repair'
 require 'session_guarantees/session_guarantee_voting'
 require 'session_guarantees/session_guarantee_client'
-
+require 'gossip/gossip'
+require 'counter/sequences'
 
 # Serializes several (vector, value) pairs into one field
 module VectorValueMatrixSerializerProtocol
@@ -62,11 +63,11 @@ module QuorumRemoteProcedureProtocol
     # Read Operation
     interface input, :read, [:request, :agent] => [:key]
     interface output, :read_ack,  [:request, :agent, :v_vector] => [:value]
-    
+
     # Version Query
     interface input, :version_query, [:request, :agent] => [:key]
     interface output, :version_ack, [:request, :agent, :v_vector] => []
-    
+
     # Write Operation
     interface input, :write, [:request, :agent] => [:key, :v_vector, :value]
     interface output, :write_ack, [:request, :agent] => []
@@ -79,6 +80,9 @@ module QuorumRemoteProcedure
   import VersionVectorKVS => :vvkvs
   import VersionMatrixSerializer => :vms
   import VectorValueMatrixSerializer => :vvms
+  import GossipProtocol => :gp
+  import StaticMembership => :sm
+  import Counter => :c
 
   state do
     table :pending_request, [:request] => []
@@ -91,8 +95,27 @@ module QuorumRemoteProcedure
     channel :write_request, \
       [:@dst, :src, :request] => [:key, :v_vector, :value]
     channel :write_response, [:dst, :@src, :request] => []
+
+    # Periodic interval for gossip protocol
+    periodic :gossip_interval, 1
   end
-  
+
+#   # Logic to add members to the gossip protocol
+#   bloom do
+#     gp.add_member <= (sm.member * c.return_count).pairs do |l, r|
+#       [l.host, r.ident]
+#     end
+#   end
+
+  # Logic to send key, value, vector pairs into gossip protocol
+  bloom do
+    # put all key, value, vector pairs into send_message (or choose one)
+    gp.send_message <+ vvkvs.kv_store
+    # when node receive key, value, vector pair, compare existing value
+    # for key, and overwrite if newer
+
+  end
+
   # Logic to prevent duplicate delivery of acks!
   # It is not well known that channels will sometimes deliver messages twice
   bloom do
@@ -245,12 +268,12 @@ module RWTimeoutQuorumAgent
   import ReadRepair => :rr
   import VersionVectorMerge => :vvm
   import VersionVectorSerializer => :vvs
-  
+
   state do
     table :read_acks, [:request, :agent, :v_vector] => [:value]
     table :version_acks, [:request, :agent, :v_vector] => []
     table :write_acks, [:request, :agent]
-    
+
     # cached puts that are still waiting for version queries
     table :pending_puts, [:request] => [:key, :value]
     # puts that have an updated version vector, and synchronized values
@@ -260,7 +283,7 @@ module RWTimeoutQuorumAgent
     # remember own address since local id in membership protocol is an id instead of a host
     table :self_addr, [] => [:host]
     table :put_parameters, [:request] => [:ack_num, :duration]
-    
+
     # for incrementing coordinator node in a write
     scratch :incremented_coordinators, [:request, :server] => [:version]
   end
@@ -285,15 +308,15 @@ module RWTimeoutQuorumAgent
     voter.begin_vote <= get_version {|g| [g.request, 0xffffffff]}
     voter.begin_vote <= ready_puts {|p| [p.request, 0xffffffff]}
     voter.num_required <= (get * parameters)\
-      .pairs(:request => :request) do |x,p| 
+      .pairs(:request => :request) do |x,p|
       [x.request, p.ack_num]
     end
     voter.num_required <= (get_version * parameters)\
-      .pairs(:request => :request) do |x,p| 
+      .pairs(:request => :request) do |x,p|
       [x.request, p.ack_num]
     end
     voter.num_required <= (ready_puts * parameters)\
-      .pairs(:request => :request) do |x,p| 
+      .pairs(:request => :request) do |x,p|
       [x.request, p.ack_num]
     end
     alarm.set_alarm <= (get * parameters)\
@@ -344,9 +367,9 @@ module RWTimeoutQuorumAgent
     status <= voter.result do |r|
       [r.ballot_id, :success] if r.status == :success
     end
-    
+
     alarm.stop_alarm <= voter.result do |r|
-      [r.ballot_id] if r.status == :success 
+      [r.ballot_id] if r.status == :success
     end
 
     # clear cached data
@@ -390,7 +413,7 @@ module RWTimeoutQuorumAgent
 
     rr.read_acks <= read_acks {|r| [r.request, r.v_vector, r.value]}
 
-    rr.read_requests <= (read_acks * get_cache * self_addr).combos(read_acks.request=>get_cache.request) do |l,m,r| 
+    rr.read_requests <= (read_acks * get_cache * self_addr).combos(read_acks.request=>get_cache.request) do |l,m,r|
       [l.request, m.key, r.host]
     end
 
@@ -401,7 +424,7 @@ module RWTimeoutQuorumAgent
   bloom do
     # if we get a put, query AT LEAST # required ack servers for vector versions
     get_version <= put {|p| [p.request, p.key]}
-    
+
     # if version_query was successful, specify the parameters for our write request, which will be issued on the next timestep. Must happen on the next timestep because the corresponding get_version request is successfully completing on this timestep
     parameters <+ (put_parameters * version_acks * voter.result).matches do |l,m,r|
       l if r.status == :success
@@ -411,10 +434,10 @@ module RWTimeoutQuorumAgent
     vvm.version_matrix <= (version_acks * voter.result).pairs(:request=>:ballot_id) do |l,r|
       [l.request. l.v_vector] if r.status == :success
     end
-    
+
     # increment self in merged vector clock
     vvs.deserialize <= vvm.merge_vector
-    
+
     # increment if element is a coordinator
     incremented_coordinators <= (vvs.deserialize_ack * self_addr).pairs do |l,r|
       [l.request, l.server, l.version + 1] if l.server == r.host
@@ -431,7 +454,7 @@ module RWTimeoutQuorumAgent
     # create the write request on the next timestep, or else we'll get a key error from the finishing get_versions request on this timestep
     ready_puts <+ (pending_puts * vvs.serialize_ack).matches do |l,r|
       [l.request, l.key, r.v_vector, l.value]
-    end 
+    end
   end
 end
 

@@ -21,13 +21,13 @@ class TestGossip < Test::Unit::TestCase
 
   def machine_step(machines)
     (0...10).each { |x|
-      puts "Machine #{x} debug"
-#       puts machines[x].messages_to_send.inspected
-#       puts machines[x].messages_to_output.inspected
-#       puts machines[x].message_chan.inspected
-      puts machines[x].messages.inspected
+#      puts "Machine #{x} debug"
+#      puts machines[x].messages_to_send.inspected
+#      puts machines[x].messages_to_output.inspected
+#      puts machines[x].message_chan.inspected
+#      puts machines[x].messages.inspected
 #      puts machines[x].recv_message.inspected
-      puts ""
+#      puts ""
       machines[x].sync_do
     }
   end
@@ -50,7 +50,7 @@ class TestGossip < Test::Unit::TestCase
     puts "Adding members..."
     1.times { machine_step(machines) }
 
-    puts "Gossiping..."
+    puts "Gossiping... (may take a while)"
     (0...num_nodes).each { |x|
       message = "Hello from #{x}"
       machines[x].sync_do { machines[x].send_message <+ [[message, 10000 + x]] }
@@ -58,15 +58,15 @@ class TestGossip < Test::Unit::TestCase
 
     machine_step(machines)
 
-    (0...num_nodes).each { |x|
-      puts "Messages known to runtime  #{x}"
-      puts machines[x].output_messages.inspected
-    }
+#     (0...num_nodes).each { |x|
+#       puts "Messages known to runtime  #{x}"
+#       puts machines[x].output_messages.inspected
+#     }
 
-    (0...num_nodes).each { |x|
-      puts "Nodes known to runtime  #{x}"
-      puts machines[x].members.inspected
-    }
+#     (0...num_nodes).each { |x|
+#       puts "Nodes known to runtime  #{x}"
+#       puts machines[x].members.inspected
+#     }
 
     puts "Checking gossiping..."
     (0...num_nodes).each { |x|
