@@ -214,7 +214,6 @@ module RWTimeoutQuorumAgentProtocol
     interface output, :put_responses, [:request, :agent] => []
     interface output, :version_responses, [:request, :agent, :v_vector] => []
   end
-
 end
 
 module RWTimeoutQuorumAgent
@@ -228,7 +227,7 @@ module RWTimeoutQuorumAgent
     table :read_acks [:request, :agent, :v_vector] => [:value]
     table :version_acks [:request, :agent, :v_vector] => []
     table :write_acks [:request, :agent]
-    table :num_Agents [:host] => [:cnt]
+    #scratch :num_Agents [:host] => [:cnt]
     
     # cached puts that are still waiting for version queries
     table :pending_puts [:request] => [:key, :value]
@@ -238,14 +237,16 @@ module RWTimeoutQuorumAgent
 
   # MISC Logic block
   state do
-    # count members
-    num_Agents <= member.group([:host], count(:host))
-    # cache put requests
+    # cache puts if we are waiting for versions to be read
     pending_puts <= put
   end
 
   # setup num candidates, set voting paramters, begin vote and set alarm
   bloom do
+    # setup num expected voters
+    voter.begin_vote <= get {|g| [g.request, 0xffffffff]}
+    voter.begin_vote <= get_version {|g| [g.request, 0xffffffff]}
+    voter.begin_vote <= ready_puts {|p| [p.request, 0xffffffff]}
     voter.num_required <= (get * parameters)\
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
@@ -254,7 +255,7 @@ module RWTimeoutQuorumAgent
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
     end
-    voter.num_required <= (put * parameters)\
+    voter.num_required <= (ready_puts * parameters)\
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
     end
@@ -266,7 +267,7 @@ module RWTimeoutQuorumAgent
       .pairs(:request => :request) do |x,p|
       [x.request, p.duration]
     end
-    alarm.set_alarm <= (put * parameters)\
+    alarm.set_alarm <= (ready_puts * parameters)\
       .pairs(:request => :request) do |x,p|
       [x.request, p.duration]
     end
@@ -282,10 +283,13 @@ module RWTimeoutQuorumAgent
   # collect remote procedure return values, record votes!
   bloom do
     # put acks in cast_vote
-    voter.cast_vote <= rp.read_response {|rr| [rr.request, rr.src, "ack", "read ack"]}
-    voter.cast_vote <= rp.version_response {|vr| [vr.request, vr.src, "ack", "version ack"]}
-    voter.cast_vote <= rp.write_response {|wr| [wr.request, wr.src, "ack", "write ack"]}
+    voter.cast_vote <= rp.read_ack {|rr| [rr.request, rr.src, "ack", "read ack"]}
+    voter.cast_vote <= rp.version_ack {|vr| [vr.request, vr.src, "ack", "version ack"]}
+    voter.cast_vote <= rp.write_ack {|wr| [wr.request, wr.src, "ack", "write ack"]}
     # cache remote procedure return values
+    read_acks <= rp.read_ack
+    version_acks <= rp.version_ack
+    write_acks <= rp.write_ack
   end
 
   # handling results and timeouts
@@ -304,8 +308,25 @@ module RWTimeoutQuorumAgent
       [r.ballot_id, :success] if r.status == :success
     end
     
-    alarm.stop_alarm <= vote.result do |r|
+    alarm.stop_alarm <= voter.result do |r|
       [r.ballot_id] if r.status == :success
+    end
+
+    # clear cached data
+    pending_puts <- (pending_puts * voter.result).pairs(:request=>:ballot_id) do |l,r|
+      l if r.status == :success
+    end
+    ready_puts <- (ready_puts * voter.result).pairs(:request=>:ballot_id) do |l,r|
+      l if r.status == :success
+    end
+    read_acks <- (read_acks * voter.result).pairs(:request=>:ballot_id) do |l,r|
+      l if r.status == :success
+    end
+    version_acks <- (version_acks * voter.result).pairs(:request=>:ballot_id) do |l,r|
+      l if r.status == :success
+    end
+    write_acks <- (write_acks * voter.result).pairs(:request=>:ballot_id) do |l,r|
+      l if r.status == :success
     end
     
   end
