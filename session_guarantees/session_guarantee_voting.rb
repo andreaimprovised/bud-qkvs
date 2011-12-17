@@ -121,7 +121,7 @@ module SessionVoteCounter
   bloom :merge_write_votes do
     pending_writes <= add_write
     # vector_merger will merge all write vectors into a total max vector.
-    vector_merger.version_matrix <= add_write {|w| [w.reqid, w.v_vector]}
+    vector_merger.version_matrix <= pending_writes {|w| [w.reqid, w.v_vector]}
   end
 
   bloom :handle_write_session_guarantees do
