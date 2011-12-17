@@ -53,15 +53,6 @@ class TestSessionVoting < Test::Unit::TestCase
     assert(@voter.write_vector.include?([0, [['a', 1]]]))
   end
 
-  def test_read
-    p 'test_read'
-    @voter.init_request <+ [[0, [], [[]], []]]
-    wait
-    @voter.add_read <+ [[[['a', 1]], 0, 'VALUEA1']]
-    wait
-  end
-
-
   def test_monotonic_reads_empty
     p 'test_monotonic_reads_empty'
     @voter.init_request <+ [[0, [:MR], [[['a', 0]]], [['a', 1]]]]
@@ -88,6 +79,14 @@ class TestSessionVoting < Test::Unit::TestCase
     @voter.init_request <+ [[0, [:MW], [['a', 0]], [['a', 1]]]]
     wait
     assert(@voter.output_write_result.include?([0, [['a', 1]]]))
+  end
+
+  def test_read
+    p 'test_read'
+    @voter.init_request <+ [[0, [], [[]], []]]
+    wait
+    @voter.add_read <+ [[[['a', 1]], 0, 'VALUEA1']]
+    wait
   end
 
 end
