@@ -18,9 +18,10 @@ end
 module SessionQuorumKVSProtocol
   state do
     interface input, :quorum_config, [] => [:r_fraction, :w_fraction] # ?
-    interface input, :kvread, [:reqid] => [:key, :session_types, :read_vector]
-    interface input, :kvwrite, [:reqid] => [:key, :value, :session_types, :write_vector]
-
+    interface input, :kvread, [:reqid] => [:key, :session_types, :read_vector, \
+          :write_vector]
+    interface input, :kvwrite, [:reqid] => [:key, :value, :session_types, \
+          :read_vector, :write_vector]
     interface output, :kvread_response, [:reqid, :read_vector] => [:value]
     interface output, :kvwrite_response, [:reqid] => [:write_vector]
   end

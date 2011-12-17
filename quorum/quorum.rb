@@ -205,7 +205,7 @@ module RWTimeoutQuorumAgentProtocol
     # a put request will have the same timeout duration for its internal get version operation and its subsequent write operation
     interface input, :get, [:request] => [:key]
     interface input, :put, [:request] => [:key, :value]
-    interface input, :get_version [:request] => [:key]
+    interface input, :get_version, [:request] => [:key]
 
     # ack_num is number of acks to wait for to declare victory
     # duration is the time in units of 0.1s to wait until failure
@@ -242,26 +242,26 @@ module RWTimeoutQuorumAgent
   import ReadRepair => :rr
   import VersionVectorMerge => :vvm
   import VersionVectorSerializer => :vvs
-  import VersionVectorConcurrency => :vvc
   
   state do
-    table :read_acks [:request, :agent, :v_vector] => [:value]
-    table :version_acks [:request, :agent, :v_vector] => []
-    table :write_acks [:request, :agent]
+    table :read_acks, [:request, :agent, :v_vector] => [:value]
+    table :version_acks, [:request, :agent, :v_vector] => []
+    table :write_acks, [:request, :agent]
     
     # cached puts that are still waiting for version queries
-    table :pending_puts [:request] => [:key, :value]
+    table :pending_puts, [:request] => [:key, :value]
     # puts that have an updated version vector, and synchronized values
-    table :ready_puts [:request] => [:key, :v_vector, :value]
+    table :ready_puts, [:request] => [:key, :v_vector, :value]
     # remember the key in a get request since read acks don't have that info
-    table :get_cache [:request] => [:key]
+    table :get_cache, [:request] => [:key]
     # remember own address since local id in membership protocol is an id instead of a host
-    table :self_addr [] => [:host]
+    table :self_addr, [] => [:host]
     table :put_parameters, [:request] => [:ack_num, :duration]
     
     # for incrementing coordinator node in a write
     scratch :incremented_coordinators, [:request, :server] => [:version]
   end
+
 
   # MISC Logic block
   state do
@@ -353,9 +353,11 @@ module RWTimeoutQuorumAgent
     ready_puts <- (ready_puts * voter.result).pairs(:request=>:ballot_id) do |l,r|
       l if r.status == :success or r.status == :fail
     end
+
     read_acks <- (read_acks * voter.result).pairs(:request=>:ballot_id) do |l,r|
       l if r.status == :success or r.status == :fail
     end
+
     version_acks <- (version_acks * voter.result).pairs(:request=>:ballot_id) do |l,r|
       l if r.status == :success or r.status == :fail
     end
@@ -366,34 +368,37 @@ module RWTimeoutQuorumAgent
       l if r.status == :success or r.status == :fail
     end
     # clear put_parameters if we couldn't get enough version acks
-    put_parameters <- (version_acks * voter.result * put_parameters).combos(version_acks.request=>:voter.result.ballot_id, version_acks.request => put_parameters.request) do |l,m,r|
+    put_parameters <- (version_acks * voter.result * put_parameters).combos(version_acks.request=>voter.result.ballot_id, version_acks.request => put_parameters.request) do |l,m,r|
       r if m.status == :fail
     end
     # clear put_parameters if write done
-    put_parameters <- (write_acks * voter.result * put_parameters).combos(write_acks.request=>:voter.result.ballot_id, version_acks.request => put_parameters.request) do |l,m,r|
+    put_parameters <- (write_acks * voter.result * put_parameters).combos(write_acks.request=>voter.result.ballot_id, write_acks.request => put_parameters.request) do |l,m,r|
       r if m.status == :fail or m.status == :success
     end
   end
-  
+
   # handle output
   bloom do
-    get_responses <= read_acks
+    #get_responses <= read_acks
     put_responses <= write_acks
     version_responses <= version_acks
 
     # do read_repair silently
+
     rr.read_acks <= read_acks {|r| [r.request, r.v_vector, r.value]}
+
     rr.read_requests <= (read_acks * get_cache * self_addr).combos(read_acks.request=>get_cache.request) do |l,m,r| 
       [l.request, m.key, r.host]
     end
-    rp.write <= (rr.write_requests * member).pairs {|l,r| [l.request, r.host, l.key, l.v_vector, l.value]}
+
+    rp.write <+ (rr.write_requests * member).pairs {|l,r| [l.request, r.host, l.key, l.v_vector, l.value]}
   end
 
   # write logic
   bloom do
     # if we get a put, query AT LEAST # required ack servers for vector versions
     get_version <= put {|p| [p.request, p.key]}
-
+    
     # if version_query was successful, specify the parameters for our write request, which will be issued on the next timestep. Must happen on the next timestep because the corresponding get_version request is successfully completing on this timestep
     parameters <+ (put_parameters * version_acks * voter.result).matches do |l,m,r|
       l if r.status == :success
@@ -405,7 +410,7 @@ module RWTimeoutQuorumAgent
     end
     
     # increment self in merged vector clock
-    vvs.deseriaize <= vvm.merge_vector
+    vvs.deserialize <= vvm.merge_vector
     
     # increment if element is a coordinator
     incremented_coordinators <= (vvs.deserialize_ack * self_addr).pairs do |l,r|
@@ -423,7 +428,6 @@ module RWTimeoutQuorumAgent
     # create the write request on the next timestep, or else we'll get a key error from the finishing get_versions request on this timestep
     ready_puts <+ (pending_puts * vvs.serialize_ack).matches do |l,r|
       [l.request, l.key, r.v_vector, l.value]
-    end
+    end 
   end
 end
-
