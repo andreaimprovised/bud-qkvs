@@ -31,13 +31,13 @@ module SessionVoteCounterProtocol
     #     value
     # @param [Object] reqid a unique id for the request
     # @param [Object] value the value read from the KVS.
-    interface input, :add_read, [:v_vector, :reqid] => [:value]
+    interface input, :add_read, [:reqid, :v_vector] => [:value]
 
     # Adds a 'vote' of a write result from a Quorum node.
     # @param [VersionVector] v_vector the version vector for the written
     #     value
     # @param [Object] reqid a unique id for the request
-    interface input, :add_write, [:v_vector, :reqid]
+    interface input, :add_write, [:reqid, :v_vector]
 
     # Signals to the module that the request is finished.
     # @param [Object] reqid the unique id of the request
