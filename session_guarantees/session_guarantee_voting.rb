@@ -160,11 +160,11 @@ module SessionVoteCounter
 
   # Remove requests that have been cleared.
   bloom :cleanup_results do
-    read_vectors <+ read_vectors.notin(end_request, :reqid => :reqid)
-    write_vector <+ write_vector.notin(end_request, :reqid => :reqid)
-    session_guarantees <+ session_guarantees.notin(end_request, :reqid => :reqid)
-    pending_reads <+ pending_reads.notin(end_request, :reqid => :reqid)
-    pending_writes <+ pending_writes.notin(end_request, :reqid => :reqid)
+    read_vectors <- (read_vectors * end_request).lefts(:reqid => :reqid)
+    write_vector <- (write_vector * end_request).lefts(:reqid => :reqid)
+    session_guarantees <- (session_guarantees * end_request).lefts(:reqid => :reqid)
+    pending_reads <- (pending_reads * end_request).lefts(:reqid => :reqid)
+    pending_writes <- (pending_writes * end_request).lefts(:reqid => :reqid)
   end
 
 end
