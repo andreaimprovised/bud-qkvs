@@ -217,6 +217,19 @@ module RWTimeoutQuorumAgentProtocol
   end
 end
 
+# VERY NOTEWORTHY THINGS
+# 1) We assume that values are always arrays. Even if you are writing a single string "val" into "key, the put request looks like: put into key "key", the value ["val"]
+# 2) Users of the RWTimeoutQuorumAgent (namely clients) can expect to use it in the following way:
+
+# FOR GETS AND GET_VERSION: get(request,key)/get_version(request,key) will output the partial set of required gets so far if status is outputting :in progress. If status outputs fail, then the request timed out. If it outputs success, the output channels will have AT LEAST the number of required acks the client specified.
+
+# PUTS ARE A LITTLE WEIRD TO USE: After a put(key,val) is invoked, a get_version using the same parameters specified is issued under the hood. A successful put corresponds to seeing status :success on a single request in 2 different timesteps.
+# Status :fail after a write means that your put request timed out while retrieving at least the specified number of versions for your key.
+# Status :success, Status :fail after a write means that your put request successfully attempted to write to at least the specified number of servers, but it didn't hear back from enough servers
+
+# BIG ASS CAVEAT: The writers of this module assumed that if server, call it Src sends 2 status updates over a channel on 2 different timesteps, then the client, call it dst, will receive the status updates on 2 different timesteps.
+# Stuff will break if this assumption is not respected since put requests are split into 2 different operations (get versions, and send with updated version). These 2 operations use the same identifier, so if dst receives the 2 status updates in its channel, on the same timestep, a key error will result.
+
 module RWTimeoutQuorumAgent
   include RWTimeoutQuorumAgentProtocol
   include StaticMembership
@@ -242,6 +255,9 @@ module RWTimeoutQuorumAgent
     # remember own address since local id in membership protocol is an id instead of a host
     table :self_addr [] => [:host]
     table :put_parameters, [:request] => [:ack_num, :duration]
+    
+    # for incrementing coordinator node in a write
+    scratch :incremented_coordinators, [:request, :server] => [:version]
   end
 
   # MISC Logic block
@@ -350,9 +366,9 @@ module RWTimeoutQuorumAgent
     put_parameters <- (version_acks * voter.result * put_parameters).combos(version_acks.request=>:voter.result.ballot_id, version_acks.request => put_parameters.request) do |l,m,r|
       r if m.status == :fail
     end
-    # clear put_parameters if we couldn't get enough write acks
+    # clear put_parameters if write done
     put_parameters <- (write_acks * voter.result * put_parameters).combos(write_acks.request=>:voter.result.ballot_id, version_acks.request => put_parameters.request) do |l,m,r|
-      r if m.status == :fail
+      r if m.status == :fail or m.status == :success
     end
   end
   
@@ -373,8 +389,38 @@ module RWTimeoutQuorumAgent
   # write logic
   bloom do
     # if we get a put, query AT LEAST # required ack servers for vector versions
-    #get_version <= put {|p| [p.request
-    #vvm.version_matrix <= version_acks 
+    get_version <= put {|p| [p.request, p.key]}
+
+    # if version_query was successful, specify the parameters for our write request, which will be issued on the next timestep. Must happen on the next timestep because the corresponding get_version request is successfully completing on this timestep
+    parameters <+ (put_parameters * version_acks * voter.result).matches do |l,m,r|
+      l if r.status == :success
+    end
+
+    # if version_query was successful produce the latest version_vector
+    vvm.version_matrix <= (version_acks * voter.result).pairs(:request=>:ballot_id) do |l,r|
+      [l.request. l.v_vector] if r.status == :success
+    end
+    
+    # increment self in merged vector clock
+    vvs.deseriaize <= vvm.merge_vector
+    
+    # increment if element is a coordinator
+    incremented_coordinators <= (vvs.deserialize_ack * self_addr).pairs do |l,r|
+      [l.request, l.server, l.version + 1] if l.server == r.host
+    end
+
+    # element stays the same if element is not a coordinator
+    incremented_coordinators <= (vvs.deserialize_ack * self_addr).pairs do |l,r|
+      l if l.server == r.host
+    end
+
+    # reserialize the incremented vectors
+    vvs.serialize <= incremented_coordinators
+
+    # create the write request on the next timestep, or else we'll get a key error from the finishing get_versions request on this timestep
+    ready_puts <+ (pending_puts * vvs.serialize_ack).matches do |l,r|
+      [l.request, l.key, r.v_vector, l.value]
+    end
   end
 end
 
