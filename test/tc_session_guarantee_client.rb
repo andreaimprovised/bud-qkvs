@@ -46,5 +46,19 @@ class TestQClient < Test::Unit::TestCase
     assert_equal([2, 'testkey', nil, 'mw', [], []], @tc.kvwrite.first)
   end
 
+  def test_read_response
+    @tc.kvget <+ [[1, 2, 'testkey']]
+    @tc.tick
+    @tc.kvread_response <+ [[1, [], 'testvalue']]
+    @tc.tick
+    assert_equal([1, 'testvalue'], @tc.kvget_response.first)
+  end
 
+  def test_write_response
+    @tc.kvput <+ [[1, 2, 'testkey', 'testvalue']]
+    @tc.tick
+    @tc.kvwrite_response <+ [[1, []]]
+    @tc.tick
+    assert_equal([1], @tc.kvputdel_response.first)
+  end
 end

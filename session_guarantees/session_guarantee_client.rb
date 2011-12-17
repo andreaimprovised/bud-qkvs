@@ -84,20 +84,19 @@ module SessionQuorumKVSClient
       [s.session_id, m.v_matrix]
     end
     reqid_session_map <- (kvwrite_response * reqid_session_map).pairs(:reqid => :reqid) do |r, s|
-      [r.reqid, r.session_id]
+      [s.reqid, s.session_id]
     end
-
   end
 
   # Updates session information (read vectors) and passes results back to client.
   bloom :respond_to_read do
-    kvputdel_response <= kvread_response{|r| [r.reqid, r.value]}
+    kvget_response <= kvread_response{|r| [r.reqid, r.value]}
     matrix_serializer.serialize <= kvread_response {|r| [r.reqid, r.read_vector] }
     read_vectors <+- (reqid_session_map * matrix_serializer.serialize_ack).pairs(:reqid => :request) do |s, m|
       [s.session_id, m.v_matrix]
     end
     reqid_session_map <- (kvread_response * reqid_session_map).pairs(:reqid => :reqid) do |r, s|
-      [r.reqid, r.session_id]
+      [s.reqid, s.session_id]
     end
   end
 
