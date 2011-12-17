@@ -254,4 +254,19 @@ class TestSessionVoting < Test::Unit::TestCase
     assert(@voter.output_write_result.include?([0, [['a', 2], ['b', 3]]]))
   end
 
+  def test_end_request
+    p 'test_end_request'
+    @voter.init_request <+ [[0, [:foo, :bar], [[['a', 0]], [['b', 1]]], [['a', 1]]]]
+    wait
+    @voter.add_write <+ [[0, [['a', 1]]]]
+    @voter.add_read <+ [[0, [['a', 2]], 'VALUE1']]
+    wait
+    assert(@voter.output_write_result.include?([0, [['a', 1]]]))
+    assert(@voter.output_read_result.include?([0, [['a', 2]], 'VALUE1']))
+    @voter.end_request <+ [[0]]
+    wait
+    assert(@voter.output_write_result.empty?)
+    assert(@voter.output_read_result.empty?)
+  end
+
 end
