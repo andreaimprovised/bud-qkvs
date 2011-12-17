@@ -200,6 +200,9 @@ end
 
 module RWTimeoutQuorumAgentProtocol
   state do
+    # requests must be unique among all operations
+    # each request must also specify parameters
+    # a put request will have the same timeout duration for its internal get version operation and its subsequent write operation
     interface input, :get, [:request] => [:key]
     interface input, :put, [:request] => [:key, :value]
     interface input, :get_version [:request] => [:key]
