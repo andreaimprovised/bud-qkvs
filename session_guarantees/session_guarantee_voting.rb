@@ -79,10 +79,12 @@ module SessionVoteCounter
     table :pending_writes, add_write.schema
     # Temporary collection of non-read_vector read results.
     scratch :pre_read_results, output_read_result.schema
-    # Temporary collection of requests with existing read results.
-    scratch :non_empty_reads, [:reqid]
     # Temporary collection of aggregated read vectors.
     scratch :max_vectors, vector_aggregator.minimal_matrix.schema
+    # max_vectors that do not satisfy the read session guarantee.
+    scratch :failed_vectors, max_vectors.schema
+    # Temporary collection of requests with existing read results.
+    scratch :failed_requests, [:reqid]
   end
 
   bloom :init_session do
@@ -137,17 +139,17 @@ module SessionVoteCounter
 
   bloom :output_read_results do
     max_vectors <= vector_aggregator.minimal_matrix
-    # Get all non-read_vector results.
+    # Get all matching results that were actually passed in as reads.
     pre_read_results <= (max_vectors * pending_reads).pairs( \
           :request => :reqid, :v_vector => :v_vector) do |max,reads|
       [max.request, max.v_vector, reads.value]
     end
-    non_empty_reads <= pre_read_results {|result| result.reqid }
-    # Add the read_vector result if the results exist.
-    output_read_result <= (max_vectors * read_vectors).pairs( \
-          :request => :reqid) do |max,read_vec|
-      [max.request, read_vec.v_vector, nil] if non_empty_reads.include?([max.reqid])
-    end
+    # Get all max_vectors that didn't have matching result.
+    failed_vectors <= max_vectors.notin(pre_read_results, :request => :reqid)
+    # Note all requests without matching results as failed.
+    failed_requests <= failed_vectors {|result| [result.reqid] }
+    # Output all successful results.
+    output_read_result <= pre_read_results.notin(failed_requests, :reqid => :reqid)
   end
 
   bloom :output_write_results do
