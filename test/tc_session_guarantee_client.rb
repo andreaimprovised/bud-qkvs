@@ -31,19 +31,19 @@ class TestQClient < Test::Unit::TestCase
   def test_kvget
     @tc.kvget <+ [[1, 2, 'testkey']]
     @tc.tick
-    assert_equal([2, 'testkey', 'mr', []], @tc.kvread.first)
+    assert_equal([2, 'testkey', 'mr', [], []], @tc.kvread.first)
   end
 
   def test_kvput
     @tc.kvput <+ [[1, 2, 'testkey', 'testvalue']]
     @tc.tick
-    assert_equal([2, 'testkey', 'testvalue', 'mr', []], @tc.kvwrite.first)
+    assert_equal([2, 'testkey', 'testvalue', 'mr', [], []], @tc.kvwrite.first)
   end
 
   def test_kvdel
     @tc.kvdel <+ [[2, 2, 'testkey']]
     @tc.tick
-    assert_equal([2, 'testkey', nil, 'mw', []], @tc.kvwrite.first)
+    assert_equal([2, 'testkey', nil, 'mw', [], []], @tc.kvwrite.first)
   end
 
 

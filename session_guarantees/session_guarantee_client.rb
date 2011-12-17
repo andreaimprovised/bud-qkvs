@@ -19,9 +19,9 @@ module SessionQuorumKVSProtocol
   state do
     interface input, :quorum_config, [] => [:r_fraction, :w_fraction] # ?
     interface input, :kvread, [:reqid] => [:key, :session_types, :read_vector, \
-          :write_vector]
+                                           :write_vector]
     interface input, :kvwrite, [:reqid] => [:key, :value, :session_types, \
-          :read_vector, :write_vector]
+                                            :read_vector, :write_vector]
     interface output, :kvread_response, [:reqid, :read_vector] => [:value]
     interface output, :kvwrite_response, [:reqid] => [:write_vector]
   end
@@ -54,22 +54,25 @@ module SessionQuorumKVSClient
 
   # Attaches session information (read vectors) to a kvget request
   bloom :request_read do
-    kvread <= (kvget * sessions * read_vectors).pairs(kvget.session_id => sessions.session_id,
-                                                      sessions.session_id => read_vectors.session_id) do |r, s, v|
-      [r.reqid, r.key, s.session_types, v.read_vector]
+    kvread <= (kvget * sessions * write_vectors * read_vectors).combos(kvget.session_id => sessions.session_id,
+                                                                       sessions.session_id => write_vectors.session_id,
+                                                                       write_vectors.session_id => read_vectors.session_id) do |r, s, v, d|
+      [r.reqid, r.key, s.session_types, v.write_vector, d.read_vector]
     end
   end
 
   # Attaches session information (write vectors) to a kvput or kvdel request. (kvdel is just a kvput with value = nil)
   bloom :request_write do
-    kvwrite <= (kvdel * sessions * write_vectors).pairs(kvdel.session_id => sessions.session_id,
-                                                        sessions.session_id => write_vectors.session_id) do |r, s, v|
-      [r.reqid, r.key, nil, s.session_types, v.write_vector]
+    kvwrite <= (kvdel * sessions * write_vectors * read_vectors).combos(kvdel.session_id => sessions.session_id,
+                                                                        sessions.session_id => write_vectors.session_id,
+                                                                        write_vectors.session_id => read_vectors.session_id) do |r, s, v, d|
+      [r.reqid, r.key, nil, s.session_types, v.write_vector, d.read_vector]
     end
 
-    kvwrite <= (kvput * sessions * write_vectors).pairs(kvput.session_id => sessions.session_id,
-                                                        sessions.session_id => write_vectors.session_id) do |r, s, v|
-      [r.reqid, r.key, r.value, s.session_types, v.write_vector]
+    kvwrite <= (kvput * sessions * write_vectors * read_vectors).combos(kvput.session_id => sessions.session_id,
+                                                                        sessions.session_id => write_vectors.session_id,
+                                                                        write_vectors.session_id => read_vectors.session_id) do |r, s, v, d|
+      [r.reqid, r.key, r.value, s.session_types, v.write_vector, d.read_vector]
     end
   end
 
@@ -77,7 +80,7 @@ module SessionQuorumKVSClient
   bloom :respond_to_write do
     kvputdel_response <= kvwrite_response{|r| [r.reqid]}
     matrix_serializer.serialize <= kvwrite_response {|r| [r.reqid, r.write_vector] }
-    write_vectors <+- (reqid_session_map * matrix_serializer.serialize_ack).pairs(:reqid => :reqid) do |s, m|
+    write_vectors <+- (reqid_session_map * matrix_serializer.serialize_ack).pairs(:reqid => :request) do |s, m|
       [s.session_id, m.v_matrix]
     end
     reqid_session_map <- (kvwrite_response * reqid_session_map).pairs(:reqid => :reqid) do |r, s|
@@ -90,7 +93,7 @@ module SessionQuorumKVSClient
   bloom :respond_to_read do
     kvputdel_response <= kvread_response{|r| [r.reqid, r.value]}
     matrix_serializer.serialize <= kvread_response {|r| [r.reqid, r.read_vector] }
-    read_vectors <+- (reqid_session_map * matrix_serializer.serialize_ack).pairs(:reqid => :reqid) do |s, m|
+    read_vectors <+- (reqid_session_map * matrix_serializer.serialize_ack).pairs(:reqid => :request) do |s, m|
       [s.session_id, m.v_matrix]
     end
     reqid_session_map <- (kvread_response * reqid_session_map).pairs(:reqid => :reqid) do |r, s|
