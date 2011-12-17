@@ -4,6 +4,7 @@ require 'membership/membership'
 require 'causality/version_vector'
 require 'vote/voting'
 require 'alarm/alarm'
+require 'read_repair/read_repair'
 
 
 # Serializes several (vector, value) pairs into one field
@@ -222,23 +223,31 @@ module RWTimeoutQuorumAgent
   import Alarm => :alarm
   import CountVoteCounter => :voter
   import QuorumRemoteProcedure => :rp
-
+  import ReadRepair => :rr
+  
   state do
     table :read_acks [:request, :agent, :v_vector] => [:value]
     table :version_acks [:request, :agent, :v_vector] => []
     table :write_acks [:request, :agent]
-    #scratch :num_Agents [:host] => [:cnt]
     
     # cached puts that are still waiting for version queries
     table :pending_puts [:request] => [:key, :value]
     # puts that have an updated version vector, and synchronized values
     table :ready_puts [:request] => [:key, :v_vector, :value]
+    # remember the key in a get request since read acks don't have that info
+    table :get_cache [:request] => [:key]
+    # remember own address since local id in membership protocol is an id instead of a host
+    table :self_addr [] => [:host]
   end
 
   # MISC Logic block
   state do
     # cache puts if we are waiting for versions to be read
     pending_puts <= put
+    # remember local address
+    self_addr <= (local_id * member).pairs(:ident=>:ident) {|l,r| r.host}
+    # cache gets for read repair
+    get_cache <= get
   end
 
   # setup num candidates, set voting paramters, begin vote and set alarm
@@ -309,26 +318,47 @@ module RWTimeoutQuorumAgent
     end
     
     alarm.stop_alarm <= voter.result do |r|
-      [r.ballot_id] if r.status == :success
+      [r.ballot_id] if r.status == :success 
     end
 
     # clear cached data
     pending_puts <- (pending_puts * voter.result).pairs(:request=>:ballot_id) do |l,r|
-      l if r.status == :success
+      l if r.status == :success or r.status == :fail
     end
     ready_puts <- (ready_puts * voter.result).pairs(:request=>:ballot_id) do |l,r|
-      l if r.status == :success
+      l if r.status == :success or r.status == :fail
     end
     read_acks <- (read_acks * voter.result).pairs(:request=>:ballot_id) do |l,r|
-      l if r.status == :success
+      l if r.status == :success or r.status == :fail
     end
     version_acks <- (version_acks * voter.result).pairs(:request=>:ballot_id) do |l,r|
-      l if r.status == :success
+      l if r.status == :success or r.status == :fail
     end
     write_acks <- (write_acks * voter.result).pairs(:request=>:ballot_id) do |l,r|
-      l if r.status == :success
+      l if r.status == :success or r.status == :fail
     end
-    
+    get_cache <- (get_cache * voter.result).pairs(:request=>:ballot_id) do |l,r|
+      l if r.status == :success or r.status == :fail
+    end
+  end
+  
+  # handle output
+  bloom do
+    get_responses <= read_acks
+    put_responses <= write_acks
+    version_responses <= version_acks
+
+    # do read_repair silently
+    rr.read_acks <= read_acks {|r| [r.request, r.v_vector, r.value]}
+    rr.read_requests <= (read_acks * get_cache * self_addr).combos(read_acks.request=>get_cache.request) do |l,m,r| 
+      [l.request, m.key, r.host]
+    end
+    rp.write <= (rr.write_requests * member).pairs {|l,r| [l.request, r.host, l.key, l.v_vector, l.value]}
+  end
+
+  # write version coordination
+  bloom do
+
   end
 end
 
