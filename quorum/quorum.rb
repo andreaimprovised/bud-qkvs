@@ -224,6 +224,9 @@ module RWTimeoutQuorumAgent
   import CountVoteCounter => :voter
   import QuorumRemoteProcedure => :rp
   import ReadRepair => :rr
+  import VersionVectorMerge => :vvm
+  import VersionVectorSerializer => :vvs
+  import VersionVectorConcurrency => :vvc
   
   state do
     table :read_acks [:request, :agent, :v_vector] => [:value]
@@ -238,12 +241,15 @@ module RWTimeoutQuorumAgent
     table :get_cache [:request] => [:key]
     # remember own address since local id in membership protocol is an id instead of a host
     table :self_addr [] => [:host]
+    table :put_parameters, [:request] => [:ack_num, :duration]
   end
 
   # MISC Logic block
   state do
     # cache puts if we are waiting for versions to be read
     pending_puts <= put
+    # cache put parameters since we'll need it to be around for the second tick if we write
+    put_parameters <= (pending_puts * parameters).pairs(:request=>:request) {|l,r| r}
     # remember local address
     self_addr <= (local_id * member).pairs(:ident=>:ident) {|l,r| r.host}
     # cache gets for read repair
@@ -340,6 +346,14 @@ module RWTimeoutQuorumAgent
     get_cache <- (get_cache * voter.result).pairs(:request=>:ballot_id) do |l,r|
       l if r.status == :success or r.status == :fail
     end
+    # clear put_parameters if we couldn't get enough version acks
+    put_parameters <- (version_acks * voter.result * put_parameters).combos(version_acks.request=>:voter.result.ballot_id, version_acks.request => put_parameters.request) do |l,m,r|
+      r if m.status == :fail
+    end
+    # clear put_parameters if we couldn't get enough write acks
+    put_parameters <- (write_acks * voter.result * put_parameters).combos(write_acks.request=>:voter.result.ballot_id, version_acks.request => put_parameters.request) do |l,m,r|
+      r if m.status == :fail
+    end
   end
   
   # handle output
@@ -356,9 +370,11 @@ module RWTimeoutQuorumAgent
     rp.write <= (rr.write_requests * member).pairs {|l,r| [l.request, r.host, l.key, l.v_vector, l.value]}
   end
 
-  # write version coordination
+  # write logic
   bloom do
-
+    # if we get a put, query AT LEAST # required ack servers for vector versions
+    #get_version <= put {|p| [p.request
+    #vvm.version_matrix <= version_acks 
   end
 end
 
