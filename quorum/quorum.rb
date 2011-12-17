@@ -441,7 +441,7 @@ end
 # TODO consider letting this take care of version ack responses.
 module SessionQuorumKVS
   include SessionQuorumKVSProtocol
-  import RWTimeoutQuorumAgent => :quorum_agent
+  import RWTimeoutQuorumAgentProtocol => :quorum_agent
   import SessionVoteCounter => :session_manager
 
   bloom :read_request do
