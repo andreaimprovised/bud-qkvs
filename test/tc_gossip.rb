@@ -70,7 +70,7 @@ class TestGossip < Test::Unit::TestCase
 
     puts "Checking gossiping..."
     (0...num_nodes).each { |x|
-      assert_equal(num_nodes, machines[x].output_messages.length)
+      assert_in_delta(machines[x].output_messages.length, num_nodes * 3/4, num_nodes * 1/4)
     }
    end
 end
