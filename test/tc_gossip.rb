@@ -1,7 +1,7 @@
 require 'rubygems'
 require 'test/unit'
 require 'bud'
-require 'gossip'
+require 'gossip/gossip'
 
 class GP
   include Bud
