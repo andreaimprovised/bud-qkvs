@@ -159,6 +159,33 @@ class TestSessionVoting < Test::Unit::TestCase
     assert(@voter.output_read_result.empty?)
   end
 
+  def test_read_your_writes_result_newer
+    p 'test_read_your_writes_result_newer'
+    @voter.init_request <+ [[0, [:RYW], [[['a', 3]]], [['a', 1]]]]
+    wait
+    @voter.add_read <+ [[0, [['a', 2]], 'VALUEA1']]
+    wait
+    assert(@voter.output_read_result.include?([0, [['a', 2]], 'VALUEA1']))
+  end
+
+  def test_read_your_writes_result_older
+    p 'test_read_your_writes_result_older'
+    @voter.init_request <+ [[0, [:RYW], [[['a', 0]]], [['a', 2]]]]
+    wait
+    @voter.add_read <+ [[0, [['a', 1]], 'VALUEA1']]
+    wait
+    assert(@voter.output_read_result.empty?)
+  end
+
+  def test_read_your_writes_result_concurrent
+    p 'test_read_your_writes_result_concurrent'
+    @voter.init_request <+ [[0, [:RYW], [[['b', 2]]], [['a', 1]]]]
+    wait
+    @voter.add_read <+ [[0, [['b', 3]], 'VALUEA1']]
+    wait
+    assert(@voter.output_read_result.empty?)
+  end
+
   def test_writes_follow_reads_empty
     p 'test_writes_follow_reads_empty'
     @voter.init_request <+ [[0, [:WFR], [[['a', 0]]], [['a', 1]]]]
