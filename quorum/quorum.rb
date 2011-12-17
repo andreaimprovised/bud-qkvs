@@ -229,24 +229,32 @@ module RWTimeoutQuorumAgent
     table :version_acks [:request, :agent, :v_vector] => []
     table :write_acks [:request, :agent]
     table :num_Agents [:host] => [:cnt]
-  end
-
-  # count members
-  state do
     
+    # cached puts that are still waiting for version queries
+    table :pending_puts [:request] => [:key, :value]
+    # puts that have an updated version vector, and synchronized values
+    table :ready_puts [:request] => [:key, :v_vector, :value]
   end
 
-  # Begin vote and set alarm
+  # MISC Logic block
+  state do
+    # count members
+    num_Agents <= member.group([:host], count(:host))
+    # cache put requests
+    pending_puts <= put
+  end
+
+  # setup num candidates, set voting paramters, begin vote and set alarm
   bloom do
-    voter.begin_vote <= (get * parameters)\
+    voter.num_required <= (get * parameters)\
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
     end
-    voter.begin_vote <= (get_version * parameters)\
+    voter.num_required <= (get_version * parameters)\
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
     end
-    voter.begin_vote <= (put * parameters)\
+    voter.num_required <= (put * parameters)\
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
     end
@@ -264,19 +272,20 @@ module RWTimeoutQuorumAgent
     end
   end
 
+  # invoke remote procedures
   bloom do
+    rp.read <= (get * member).pairs {|g,m| [g.request, m.host, g.key]}
+    rp.version_query <= (get_version * member).pairs {|g,m| [g.request, m.host, g.key]}
+    rp.write <= (ready_puts * member).pairs {|p,m| [p.request, m.host, p.key, p.v_vector, p.value]}
+  end
 
-  # record votes!
+  # collect remote procedure return values, record votes!
   bloom do
     # put acks in cast_vote
     voter.cast_vote <= rp.read_response {|rr| [rr.request, rr.src, "ack", "read ack"]}
     voter.cast_vote <= rp.version_response {|vr| [vr.request, vr.src, "ack", "version ack"]}
     voter.cast_vote <= rp.write_response {|wr| [wr.request, wr.src, "ack", "write ack"]}
-  end
-
-  # cache responses
-  bloom do
-
+    # cache remote procedure return values
   end
 
   # handling results and timeouts
