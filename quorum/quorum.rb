@@ -5,6 +5,7 @@ require 'causality/version_vector'
 require 'vote/voting'
 require 'alarm/alarm'
 require 'read_repair/read_repair'
+require 'session_guarantees/session_guarantee_voting'
 
 
 # Serializes several (vector, value) pairs into one field
@@ -219,8 +220,6 @@ module SessionQuorumKVS
     session_manager.init_request <= kvwrite do |req|
       [req.reqid, req.session_types, req.vector, req.write_vector]
     end
-    # NOTE: Currently assuming this does the full version-request/put process.
-    # This may not be the case.
     quorum_agent.put <= kvwrite {|write| [write.reqid, write.key, write.value] }
   end
 
