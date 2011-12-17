@@ -1,3 +1,5 @@
+require "causality/version_vector"
+
 # Mix in with client. Abstracts away version vectors for the user.
 module SessionQuorumKVSClientProtocol
   state do
@@ -28,6 +30,7 @@ end
 module SessionQuorumKVSClient
   include SessionQuorumKVSClientProtocol
   include SessionQuorumKVSProtocol
+  import VersionMatrixSerializer => :matrix_serializer
 
   state do
     table :sessions, [:session_id] => [:session_types]
@@ -72,14 +75,26 @@ module SessionQuorumKVSClient
   # Updates session information (write vectors) and passes results back to client.
   bloom :respond_to_write do
     kvputdel_response <= kvwrite_response{|r| [r.reqid]}
-    write_vectors <+- (reqid_session_map * kvwrite_response).pairs(:reqid => :reqid) do |s, w|
-      [s.session_id, w.write_vector]
+    matrix_serializer.serialize <= kvwrite_response {|r| [r.reqid, r.write_vector] }
+    write_vectors <+- (reqid_session_map * matrix_serializer.serialize_ack).pairs(:reqid => :reqid) do |s, m|
+      [s.session_id, m.v_matrix]
     end
+    reqid_session_map <- (kvwrite_response * reqid_session_map).pairs(:reqid => :reqid) do |r, s|
+      [r.reqid, r.session_id]
+    end
+
   end
 
   # Updates session information (read vectors) and passes results back to client.
   bloom :respond_to_read do
-    kvputdel_response <= kvwrite_response{|r| [r.reqid, r.value]}
+    kvputdel_response <= kvread_response{|r| [r.reqid, r.value]}
+    matrix_serializer.serialize <= kvread_response {|r| [r.reqid, r.read_vector] }
+    read_vectors <+- (reqid_session_map * matrix_serializer.serialize_ack).pairs(:reqid => :reqid) do |s, m|
+      [s.session_id, m.v_matrix]
+    end
+    reqid_session_map <- (kvread_response * reqid_session_map).pairs(:reqid => :reqid) do |r, s|
+      [r.reqid, r.session_id]
+    end
   end
 
 end
