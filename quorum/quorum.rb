@@ -198,6 +198,58 @@ module QuorumRemoteProcedure
 
 end
 
+# This module can be used by a client module to perform read and write
+# requests with session guarantees.
+# TODO consider letting this take care of version ack responses.
+module SessionQuorumKVS
+  include SessionQuorumKVSProtocol
+  import RWTimeoutQuorumAgentProtocol => :quorum_agent
+  import SessionVoteCounter => :session_manager
+
+  bloom :read_request do
+    # Initialize request in session_manager.
+    session_manager.init_request <= kvread do |req|
+      [req.reqid, req.session_types, req.vector, req.write_vector]
+    end
+    quorum_agent.get <= kvread {|read| [read.reqid, read.key] }
+  end
+
+  bloom :write_response do
+    # Initialize request in session_manager.
+    session_manager.init_request <= kvwrite do |req|
+      [req.reqid, req.session_types, req.vector, req.write_vector]
+    end
+    # NOTE: Currently assuming this does the full version-request/put process.
+    # This may not be the case.
+    quorum_agent.put <= kvwrite {|write| [write.reqid, write.key, write.value] }
+  end
+
+  bloom :handle_get_responses do
+    session_manager.add_read <= quorum_agent.get_responses do |resp|
+      [resp.request, resp.v_vector, resp.value]
+    end
+  end
+
+  bloom :handle_version_responses do
+    session_manager.add_write <= quorum_agent.version_responses do |resp|
+      [resp.request, resp.v_vector]
+    end
+  end
+
+  bloom :output_results do
+    kvread_response <= session_manager.output_read_result
+    kvwrite_response <= session_manager.output_write_result
+  end
+
+  bloom :end_request do
+    session_manager.end_request <= quorum_agent.status do |stat|
+      [stat.request] if stat.state == :sucess or stat.state == :fail
+    end
+  end
+
+end
+
+
 module RWTimeoutQuorumAgentProtocol
   state do
     # requests must be unique among all operations
