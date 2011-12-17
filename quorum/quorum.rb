@@ -198,72 +198,85 @@ module QuorumRemoteProcedure
 end
 
 module RWTimeoutQuorumAgentProtocol
-  #include QuorumAgentProtocol
-  
-  # interface input, :begin_vote, [:ballot_id] => [:num_votes]
-  # interface input, :cast_vote, [:ballot_id, :agent, :vote, :note]
-  # interface output, :result, [:ballot_id] => [:status, :result,
-  #                                             :votes, :notes
-
-  # interface input, :set_alarm, [:ident] => [:duration]
-  # interface input, :stop_alarm, [:ident] => []
-  # interface output, :alarm, [:ident] => []
-
   state do
-    # Parameter Input and Status Output
-    # ack_size is the number of acks to wait for to declare victory
+    interface input, :get, [:request] => [:key]
+    interface input, :put, [:request] => [:key, :value]
+    interface input, :get_version [:request] => [:key]
+
+    # ack_num is number of acks to wait for to declare victory
     # duration is the time in units of 0.1s to wait until failure
     interface input, :parameters, [:request] => [:ack_num, :duration]
-    interface input, :delete, [:request] => []
+
     # states are - :success, :fail, :in_progress
-    interface output, :status, [:request] => [:state]   
+    # NOTE: output responses do not persist after fail or success is reached
+    interface output, :status, [:request] => [:state]
+    interface output, :get_responses, [:request, :agent, :v_vector] => [:value]
+    interface output, :put_responses, [:request, :agent] => []
+    interface output, :version_responses, [:request, :agent, :v_vector] => []
   end
 
 end
 
 module RWTimeoutQuorumAgent
+  include RWTimeoutQuorumAgentProtocol
+  include StaticMembership
   import Alarm => :alarm
   import CountVoteCounter => :voter
-  #import QuorumAgent => :qa
+  import QuorumRemoteProcedure => :rp
 
   state do
-    table :acks, [:request] => [:src]
+    table :read_acks [:request, :agent, :v_vector] => [:value]
+    table :version_acks [:request, :agent, :v_vector] => []
+    table :write_acks [:request, :agent]
+    table :num_Agents [:host] => [:cnt]
+  end
+
+  # count members
+  state do
+    
   end
 
   # Begin vote and set alarm
   bloom do
-    voter.begin_vote <= (read * parameters)\
+    voter.begin_vote <= (get * parameters)\
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
     end
-    voter.begin_vote <= (version_query * parameters)\
+    voter.begin_vote <= (get_version * parameters)\
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
     end
-    voter.begin_vote <= (write * parameters)\
+    voter.begin_vote <= (put * parameters)\
       .pairs(:request => :request) do |x,p| 
       [x.request, p.ack_num]
     end
-    alarm.set_alarm <= (read * parameters)\
+    alarm.set_alarm <= (get * parameters)\
       .pairs(:request => :request) do |x,p|
       [x.request, p.duration]
     end
-    alarm.set_alarm <= (version_query * parameters)\
+    alarm.set_alarm <= (get_version * parameters)\
       .pairs(:request => :request) do |x,p|
       [x.request, p.duration]
     end
-    alarm.set_alarm <= (write * parameters)\
+    alarm.set_alarm <= (put * parameters)\
       .pairs(:request => :request) do |x,p|
       [x.request, p.duration]
     end
   end
-  
+
+  bloom do
+
   # record votes!
   bloom do
     # put acks in cast_vote
-    voter.cast_vote <= qa.read_response {|rr| [rr.request, rr.src, "ack", "no note"]}
-    voter.cast_vote <= qa.version_response {|vr| [vr.request, vr.src, "ack", "no note"]}
-    voter.cast_vote <= qa.write_response {|wr| [wr.request, wr.src, "ack", "no note"]}
+    voter.cast_vote <= rp.read_response {|rr| [rr.request, rr.src, "ack", "read ack"]}
+    voter.cast_vote <= rp.version_response {|vr| [vr.request, vr.src, "ack", "version ack"]}
+    voter.cast_vote <= rp.write_response {|wr| [wr.request, wr.src, "ack", "write ack"]}
+  end
+
+  # cache responses
+  bloom do
+
   end
 
   # handling results and timeouts
