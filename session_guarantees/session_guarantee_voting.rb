@@ -145,7 +145,8 @@ module SessionVoteCounter
       [max.request, max.v_vector, reads.value]
     end
     # Get all max_vectors that didn't have matching result.
-    failed_vectors <= max_vectors.notin(pre_read_results, :request => :reqid)
+    failed_vectors <= max_vectors.notin(pre_read_results, :request => :reqid, \
+                                       :v_vector => :v_vector)
     # Note all requests without matching results as failed.
     failed_requests <= failed_vectors {|result| [result.reqid] }
     # Output all successful results.
