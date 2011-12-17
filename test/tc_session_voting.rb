@@ -227,4 +227,31 @@ class TestSessionVoting < Test::Unit::TestCase
     assert(@voter.output_write_result.include?([0, [['a', 1]]]))
   end
 
+  def test_monotonic_writes_result_newer
+    p 'test_monotonic_writes_result_newer'
+    @voter.init_request <+ [[0, [:MW], [[['a', 3]]], [['a', 1]]]]
+    wait
+    @voter.add_write <+ [[0, [['a', 2]]]]
+    wait
+    assert(@voter.output_write_result.include?([0, [['a', 2]]]))
+  end
+
+  def test_monotonic_writes_result_older
+    p 'test_monotonic_writes_result_older'
+    @voter.init_request <+ [[0, [:MW], [[['a', 3]]], [['a', 2]]]]
+    wait
+    @voter.add_write <+ [[0, [['a', 1]]]]
+    wait
+    assert(@voter.output_write_result.include?([0, [['a', 2]]]))
+  end
+
+  def test_monotonic_writes_result_concurrent
+    p 'test_monotonic_writes_result_concurrent'
+    @voter.init_request <+ [[0, [:MW], [[['a', 3]]], [['b', 3]]]]
+    wait
+    @voter.add_write <+ [[0, [['a', 2]]]]
+    wait
+    assert(@voter.output_write_result.include?([0, [['a', 2], ['b', 3]]]))
+  end
+
 end
