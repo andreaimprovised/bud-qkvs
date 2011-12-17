@@ -28,9 +28,9 @@ end
 
 module ReadRepair
   include ReadRepairProtocol
-  include VersionVectorSerializerProtocol
   import VersionVectorConcurrency => :vvc
   import VersionVectorMerge => :vvm
+  import VersionVectorSerializer => :vvs
   
   state do
     # temp state. I wish temps could have schema declarations
@@ -61,35 +61,23 @@ module ReadRepair
     vvm.version_matrix <= freshest_reads {|t| [t.request, t.v_vector]}
 
     # increment the coordinator in the merged vector clock
-    # is another VV serializer implementation, but this one increments coordinataors
-    deserialize <= vvm.merge_vector
-    deserialize_ack <= deserialize.flat_map do |x|
-      x.v_vector.map do |y|
-        [x.request, y[0], y[1]]
-      end
-    end
+    vvs.deserialize <= vvm.merge_vector
     
     # increment if element is a coordinator
-    incremented_coordinators <= (deserialize_ack * read_requests).pairs(:request=>:request) do |l,r| 
+    incremented_coordinators <= (vvs.deserialize_ack * read_requests).pairs(:request=>:request) do |l,r| 
       [l.request, l.server, l.version + 1] if l.server == r.server
     end
 
     # element stays the same if it is not a coordinator
-    incremented_coordinators <= (deserialize_ack * read_requests).pairs(:request=>:request) do |l,r|
+    incremented_coordinators <= (vvs.deserialize_ack * read_requests).pairs(:request=>:request) do |l,r|
       l if l.server != r.server
     end
     
     # reserialize the incremented vectors
-    serialize <= incremented_coordinators
-
-    serialize_ack <= serialize.reduce({}) do |meta, x|
-      meta[x.request] ||= []
-      meta[x.request] << [x.server, x.version]
-      meta
-    end
+    vvs.serialize <= incremented_coordinators
 
     # pending_write_requests contains one write per request id, that is guaranteed to be fresh. That write might be redundant, however
-    pending_write_requests <= (read_requests * merged_values * serialize_ack).matches do |l,m,r|
+    pending_write_requests <= (read_requests * merged_values * vvs.serialize_ack).matches do |l,m,r|
       [l.request, l.key, r.v_vector, m.value]
     end
 
