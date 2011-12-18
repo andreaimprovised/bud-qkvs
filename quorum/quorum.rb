@@ -100,22 +100,6 @@ module QuorumRemoteProcedure
     periodic :gossip_interval, 1
   end
 
-#   # Logic to add members to the gossip protocol
-#   bloom do
-#     gp.add_member <= (sm.member * c.return_count).pairs do |l, r|
-#       [l.host, r.ident]
-#     end
-#   end
-
-  # Logic to send key, value, vector pairs into gossip protocol
-  bloom do
-    # put all key, value, vector pairs into send_message (or choose one)
-    gp.send_message <+ vvkvs.kv_store
-    # when node receive key, value, vector pair, compare existing value
-    # for key, and overwrite if newer
-
-  end
-
   # Logic to prevent duplicate delivery of acks!
   # It is not well known that channels will sometimes deliver messages twice
   bloom do
@@ -308,7 +292,7 @@ module RWTimeoutQuorumAgent
     # setup num expected voters
     begin_vote <= get {|g| [g.request, 0xffffffff]}
     begin_vote <= get_version {|g| [g.request, 0xffffffff]}
-    begin_vote <= ready_puts {|p| [p.request, 0xffffffff]}    
+    begin_vote <= ready_puts {|p| [p.request, 0xffffffff]}
     num_required <= (get * parameters).pairs(:request => :request){|x,p|[x.request, p.ack_num]}
     num_required <= (get_version * parameters).pairs(:request => :request) {|x,p|[x.request, p.ack_num]}
     num_required <= (ready_puts * parameters).pairs(:request => :request){|x,p| [x.request, p.ack_num]}
@@ -353,7 +337,7 @@ module RWTimeoutQuorumAgent
     end
 
     alarm.stop_alarm <= result do |r|
-      [r.ballot_id] if r.status == :success 
+      [r.ballot_id] if r.status == :success
     end
 
     # clear cached data
@@ -396,7 +380,7 @@ module RWTimeoutQuorumAgent
     # do read_repair silently
     rr.read_acks <= read_acks {|r| [r.request, r.v_vector, r.value]}
 
-    rr.read_requests <= (read_acks * get_cache * my_addr).combos(read_acks.request=>get_cache.request) do |l,m,r| 
+    rr.read_requests <= (read_acks * get_cache * my_addr).combos(read_acks.request=>get_cache.request) do |l,m,r|
       [l.request, m.key, r.host]
     end
 
