@@ -334,70 +334,75 @@ module RWTimeoutQuorumAgent
     read_acks <= rp.read_ack
     version_acks <= rp.version_ack
     write_acks <= rp.write_ack
+    stdio <~ status.inspected
+    stdio <~ read_acks.inspected
+    stdio <~ result.inspected
+    stdio <~ alarm.alarm.inspected
+    stdio <~ alarm.countdowns.inspected
   end
 
   # handling results and timeouts
   bloom do
-     # timer runs out, vote fails, output error
-    status <= (alarm.alarm * result).pairs(:ident=>:ballot_id) do |l,r|
-      [l.ident, :fail] if r.status == :fail
+     # timer runs out, vote not done output error
+    status <= alarm.alarm do |a|
+      [a.ident, :fail] if not result.exists?{|r| r.ballot_id == a.ident}
     end
-    # timer runs out, vote succeeds, output success
-    status <= (alarm.alarm * result).pairs(:ident=>:ballot_id) do |l,r|
-      [l.ident, :success] if r.status == :success
+
+    # timer runs out, vote finishes simultaneously output success
+    status <= alarm.alarm do |a|
+      [a.ident, :success] if result.exists? {|r| r.ballot_id == a.ident}
     end
 
     # vote successful, timer still going, clear timer: output success
-    status <= result do |r|
-      [r.ballot_id, :success] if r.status == :success
+    status <= (result * alarm.countdowns).pairs(:ballot_id=>:ident) do |l,r|
+      [l.ballot_id, :success] if l.status == :success
     end
 
-    alarm.stop_alarm <= result do |r|
-      [r.ballot_id] if r.status == :success 
+    alarm.stop_alarm <= (result * alarm.countdowns).pairs(:ballot_id=>:ident) do |l,r|
+      [l.ballot_id] if l.status == :success 
     end
 
     # clear cached data
-    pending_puts <- (pending_puts * result).pairs(:request=>:ballot_id) do |l,r|
-      l if r.status == :success or r.status == :fail
+    pending_puts <- (pending_puts * status).pairs(:request=>:request) do |l,r|
+      l if r.state == :success or r.state == :fail
     end
-    ready_puts <- (ready_puts * result).pairs(:request=>:ballot_id) do |l,r|
-      l if r.status == :success or r.status == :fail
-    end
-
-    read_acks <- (read_acks * result).pairs(:request=>:ballot_id) do |l,r|
-      l if r.status == :success or r.status == :fail
+    ready_puts <- (ready_puts * status).pairs(:request=>:request) do |l,r|
+      l if r.state == :success or r.state == :fail
     end
 
-    version_acks <- (version_acks * result).pairs(:request=>:ballot_id) do |l,r|
-      l if r.status == :success or r.status == :fail
+    read_acks <- (read_acks * status).pairs(:request=>:request) do |l,r|
+      l if r.state == :success or r.state == :fail
     end
-    write_acks <- (write_acks * result).pairs(:request=>:ballot_id) do |l,r|
-      l if r.status == :success or r.status == :fail
+    version_acks <- (version_acks * status).pairs(:request=>:request) do |l,r|
+      l if r.state == :success or r.state == :fail
     end
-    get_cache <- (get_cache * result).pairs(:request=>:ballot_id) do |l,r|
-      l if r.status == :success or r.status == :fail
+    write_acks <- (write_acks * status).pairs(:request=>:request) do |l,r|
+      l if r.state == :success or r.state == :fail
+    end
+    get_cache <- (get_cache * status).pairs(:request=>:request) do |l,r|
+      l if r.state == :success or r.state == :fail
     end
     # clear put_parameters if we couldn't get enough version acks
-    put_parameters <- (version_acks * result * put_parameters).combos(version_acks.request=>result.ballot_id, version_acks.request => put_parameters.request) do |l,m,r|
+    put_parameters <- (version_acks * status * put_parameters).matches do |l,m,r|
       r if m.status == :fail
     end
     # clear put_parameters if write done
-    put_parameters <- (write_acks * result * put_parameters).combos(write_acks.request=>result.ballot_id, write_acks.request => put_parameters.request) do |l,m,r|
+    put_parameters <- (write_acks * status * put_parameters).matches do |l,m,r|
       r if m.status == :fail or m.status == :success
     end
   end
 
   # handle output
   bloom do
-    #get_responses <= read_acks
+    get_responses <= read_acks
     put_responses <= write_acks
     version_responses <= version_acks
-
+    
     # do read_repair silently
-    rr.read_acks <= read_acks {|r| [r.request, r.v_vector, r.value]}
+    rr.read_acks <= (status * read_acks).pairs(:request=>:request) {|l,r| [r.request, r.v_vector, r.value] if l.state == :success}
 
-    rr.read_requests <= (read_acks * get_cache * my_addr).combos(read_acks.request=>get_cache.request) do |l,m,r| 
-      [l.request, m.key, r.host]
+    rr.read_requests <= (read_acks * get_cache * my_addr * status).combos(read_acks.request=>get_cache.request, get_cache.request=>status.request) do |r,g,a,s| 
+      [r.request, g.key, a.host] if s.state == :success
     end
 
     rp.write <+ (rr.write_requests * member).pairs {|l,r| [l.request, r.host, l.key, l.v_vector, l.value]}
@@ -500,7 +505,6 @@ a = RWTimeoutQuorumAgent.new
 a.add_member <+ [['127.0.0.1:9007', 0],['127.0.0.1:9008', 1]]
 a.my_id <+ [[0]]
 a.get <+ [[1, "yay"]]
-a.parameters <+ [[1, 3, 20]]
-a.tick
-a.tick
+a.parameters <+ [[1, 3, 1]]
+10.times {a.tick}
 =end
