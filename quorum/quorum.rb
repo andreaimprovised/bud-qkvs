@@ -97,7 +97,23 @@ module QuorumRemoteProcedure
     channel :write_response, [:dst, :@src, :request] => []
 
     # Periodic interval for gossip protocol
-    periodic :gossip_interval, 1
+    periodic :gossip_timer, 1
+    scratch :gossip_kvvalue, vvkvs.kv_store.schema
+  end
+
+  # Logic to send key, value, vector pairs into gossip protocol
+  bloom do
+    gossip_kvvalue <= vvkvs.kv_store.group([], choose_rand)
+    c.increment_count <= [["gossip"]] if gossip_timer.exists?
+    c.get_count <= [["gossip"]]
+    gp.send_message <= (gossip_kvvalue * c.return_count).pairs { |l, r|
+      if gossip_timer.exists?
+        [[l.key, l.v_vector, l.value], r.tally]
+      end
+    }
+    vvkvs.write <= (gp.recv_message * c.return_count).pairs { |l, r|
+        [ip_port + r.tally, l.message[0], l.message[1], l.message[2]]
+    }
   end
 
   # Logic to prevent duplicate delivery of acks!
