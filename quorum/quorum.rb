@@ -97,23 +97,23 @@ module QuorumRemoteProcedure
     channel :write_response, [:dst, :@src, :request] => []
 
     # Periodic interval for gossip protocol
-    periodic :gossip_interval, 1
+    periodic :gossip_timer, 1
+    scratch :gossip_kvvalue, vvkvs.kv_store.schema
   end
-
-#   # Logic to add members to the gossip protocol
-#   bloom do
-#     gp.add_member <= (sm.member * c.return_count).pairs do |l, r|
-#       [l.host, r.ident]
-#     end
-#   end
 
   # Logic to send key, value, vector pairs into gossip protocol
   bloom do
-    # put all key, value, vector pairs into send_message (or choose one)
-    gp.send_message <+ vvkvs.kv_store
-    # when node receive key, value, vector pair, compare existing value
-    # for key, and overwrite if newer
-
+    gossip_kvvalue <= vvkvs.kv_store.group([], choose_rand)
+    c.increment_count <= [["gossip"]] if gossip_timer.exists?
+    c.get_count <= [["gossip"]]
+    gp.send_message <= (gossip_kvvalue * c.return_count).pairs { |l, r|
+      if gossip_timer.exists?
+        [[l.key, l.v_vector, l.value], r.tally]
+      end
+    }
+    vvkvs.write <= (gp.recv_message * c.return_count).pairs { |l, r|
+        [ip_port + r.tally, l.message[0], l.message[1], l.message[2]]
+    }
   end
 
   # Logic to prevent duplicate delivery of acks!
@@ -308,7 +308,7 @@ module RWTimeoutQuorumAgent
     # setup num expected voters
     begin_vote <= get {|g| [g.request, 0xffffffff]}
     begin_vote <= get_version {|g| [g.request, 0xffffffff]}
-    begin_vote <= ready_puts {|p| [p.request, 0xffffffff]}    
+    begin_vote <= ready_puts {|p| [p.request, 0xffffffff]}
     num_required <= (get * parameters).pairs(:request => :request){|x,p|[x.request, p.ack_num]}
     num_required <= (get_version * parameters).pairs(:request => :request) {|x,p|[x.request, p.ack_num]}
     num_required <= (ready_puts * parameters).pairs(:request => :request){|x,p| [x.request, p.ack_num]}
