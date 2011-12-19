@@ -262,8 +262,8 @@ end
 # 3b) when status outputs fail, the output interfaces will still contain partial responses, but they will no longer be output in subsequent timesteps
 
 # Output interfaces do not persist after success or fail, but they will continuously stream a partial set of acks while an operation is in progress
-class RWTimeoutQuorumAgent
-  include Bud
+module RWTimeoutQuorumAgent
+  #include Bud
   include RWTimeoutQuorumAgentProtocol
   include StaticMembership
   include CountVoteCounter
@@ -433,7 +433,6 @@ class RWTimeoutQuorumAgent
       [l.request, l.key, r.v_vector, l.value]
     end
   end
-
 =begin
   #debug
   bloom do
@@ -449,7 +448,6 @@ stdio <~ alarm.stop_alarm {|t| ["stop_alarm contains "+t.inspect+" at #{budtime}
     stdio <~ pending_puts {|t| ["pending_puts contains "+t.inspect+" at #{budtime}"]}
   end
 =end
-
 end
 
 # This module can be used by a client module to perform read and write
@@ -501,8 +499,8 @@ module SessionQuorumKVS
 
 end
 
-# write test
 =begin
+# write test
 a = RWTimeoutQuorumAgent.new(:ip=>'127.0.0.1',:port=>'9007')
 a.add_member <+ [['127.0.0.1:9007', 0],['127.0.0.1:9008', 1]]
 a.my_id <+ [[0]]
