@@ -380,8 +380,8 @@ module RWTimeoutQuorumAgent
     version_acks <- (version_acks * result).pairs(:request=>:ballot_id) do |l,r|
       l if r.status == :success or r.status == :fail
     end
-    write_acks <- (write_acks * status).pairs(:request=>:request) do |l,r|
-      l if r.state == :success or r.state == :fail
+    write_acks <- (write_acks * result).pairs(:request=>:ballot_id) do |l,r|
+      l if r.status == :success or r.status == :fail
     end
     get_cache <- (get_cache * status).pairs(:request=>:request) do |l,r|
       l if r.state == :success or r.state == :fail
@@ -393,13 +393,15 @@ module RWTimeoutQuorumAgent
     get_responses <= read_acks
     put_responses <= write_acks
     version_responses <= version_acks
-    
+
     # do read_repair silently
     rr.read_acks <= (status * read_acks).pairs(:request=>:request) {|l,r| [r.request, r.v_vector, r.value] if l.state == :success}
 
     rr.read_requests <= (read_acks * get_cache * my_addr * status).combos(read_acks.request=>get_cache.request, get_cache.request=>status.request) do |r,g,a,s| 
       [r.request, g.key, a.host] if s.state == :success
     end
+
+    rp.write <+ (rr.write_requests * member).pairs {|l,r| [l.request, r.host, l.key, l.v_vector, l.value]}
   end
 
   # write logic
@@ -433,6 +435,7 @@ module RWTimeoutQuorumAgent
       [l.request, l.key, r.v_vector, l.value]
     end
   end
+
 =begin
   #debug
   bloom do
@@ -446,8 +449,11 @@ stdio <~ alarm.stop_alarm {|t| ["stop_alarm contains "+t.inspect+" at #{budtime}
     stdio <~ alarm.countdowns {|t| ["countdowns contains "+t.inspect+" at #{budtime}"]}
     stdio <~ num_required {|t| ["num_required contains "+t.inspect+" at #{budtime}"]}
     stdio <~ pending_puts {|t| ["pending_puts contains "+t.inspect+" at #{budtime}"]}
+    stdio <~ read_acks {|t| ["read_acks contains "+t.inspect+" at #{budtime}"]}
+    stdio <~ get_cache {|t| ["get_cache contains "+t.inspect+" at #{budtime}"]}
   end
 =end
+
 end
 
 # This module can be used by a client module to perform read and write
@@ -504,8 +510,11 @@ end
 a = RWTimeoutQuorumAgent.new(:ip=>'127.0.0.1',:port=>'9007')
 a.add_member <+ [['127.0.0.1:9007', 0],['127.0.0.1:9008', 1]]
 a.my_id <+ [[0]]
-a.put <+ [[1, "key", "value"]]
+a.put <+ [[1, "key", ["value"]]]
 a.parameters <+ [[1, 1, 20]]
+20.times {a.tick}
+a.get <+ [[2, "key"]]
+a.parameters <+ [[2, 1, 20]]
 20.times {a.tick}
 =end
 
