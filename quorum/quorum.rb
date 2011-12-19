@@ -87,6 +87,7 @@ module QuorumRemoteProcedure
   state do
     table :pending_request, [:request] => []
     table :pending_response, [:request] => []
+    table :member, [:host] => [:ident]
 
     channel :read_request, [:@dst, :src, :request] => [:key]
     channel :read_response, [:dst, :@src, :request] => [:matrix]
@@ -99,6 +100,11 @@ module QuorumRemoteProcedure
     # Periodic interval for gossip protocol
     periodic :gossip_timer, 1
     scratch :gossip_kvvalue, vvkvs.kv_store.schema
+  end
+
+  # pass of member too the vvkvs
+  bloom do
+    vvkvs.member <= member
   end
 
   # Logic to send key, value, vector pairs into gossip protocol
@@ -250,22 +256,18 @@ end
 # 1) We assume that values are always arrays. Even if you are writing a single string "val" into "key, the put request looks like: put into key "key", the value ["val"]
 # 2) Users of the RWTimeoutQuorumAgent (namely clients) can expect to use it in the following way:
 
-# FOR GETS AND GET_VERSION: get(request,key)/get_version(request,key) will output the partial set of required gets so far if status is outputting :in progress. If status outputs fail, then the request timed out. If it outputs success, the output channels will have AT LEAST the number of required acks the client specified.
+# 1) perform a request: get, put, get_version
+# 2) the partial responses will be poplated in the get, put, and version output interfaces
+# 3) when status outputs success, there will be at least as many responses as there are ack nums as specified in parameters
+# 3b) when status outputs fail, the output interfaces will still contain partial responses, but they will no longer be output in subsequent timesteps
 
-# PUTS ARE A LITTLE WEIRD TO USE: After a put(key,val) is invoked, a get_version using the same parameters specified is issued under the hood. A successful put corresponds to seeing status :success on a single request in 2 different timesteps.
-# Status :fail after a write means that your put request timed out while retrieving at least the specified number of versions for your key.
-# Status :success, Status :fail after a write means that your put request successfully attempted to write to at least the specified number of servers, but it didn't hear back from enough servers
-
-# BIG ASS CAVEAT: The writers of this module assumed that if server, call it Src sends 2 status updates over a channel on 2 different timesteps, then the client, call it dst, will receive the status updates on 2 different timesteps.
-# Stuff will break if this assumption is not respected since put requests are split into 2 different operations (get versions, and send with updated version). These 2 operations use the same identifier, so if dst receives the 2 status updates in its channel, on the same timestep, a key error will result.
-
-module RWTimeoutQuorumAgent
-  #include Bud
+# Output interfaces do not persist after success or fail, but they will continuously stream a partial set of acks while an operation is in progress
+class RWTimeoutQuorumAgent
+  include Bud
   include RWTimeoutQuorumAgentProtocol
   include StaticMembership
-  import Alarm => :alarm
-  #stupid bug had to include it
   include CountVoteCounter
+  import Alarm => :alarm
   import QuorumRemoteProcedure => :rp
   import ReadRepair => :rr
   import VersionVectorMerge => :vvm
@@ -284,23 +286,21 @@ module RWTimeoutQuorumAgent
     table :get_cache, [:request] => [:key]
     # remember own address since local id in membership protocol is an id instead of a host
     table :my_addr, []=>[:host]
-    table :put_parameters, [:request] => [:ack_num, :duration]
 
     # for incrementing coordinator node in a write
     scratch :incremented_coordinators, [:request, :server] => [:version]
   end
 
-
   # MISC Logic block
   bloom do
     # cache puts if we are waiting for versions to be read
     pending_puts <= put
-    # cache put parameters since we'll need it to be around for the second tick if we write
-    put_parameters <= (pending_puts * parameters).pairs(:request=>:request) {|l,r| r}
     # remember local address
     my_addr <= (local_id * member).matches {|l,r| [r.host]}
     # cache gets for read repair
     get_cache <= get
+    # pass off member to rp module
+    rp.member <= member
   end
 
   # setup num candidates, set voting paramters, begin vote and set alarm
@@ -312,6 +312,10 @@ module RWTimeoutQuorumAgent
     num_required <= (get * parameters).pairs(:request => :request){|x,p|[x.request, p.ack_num]}
     num_required <= (get_version * parameters).pairs(:request => :request) {|x,p|[x.request, p.ack_num]}
     num_required <= (ready_puts * parameters).pairs(:request => :request){|x,p| [x.request, p.ack_num]}
+    # start new vote for write if get_version before write succeeded on this timestep
+    num_required <+ (ongoing_ballots * result).pairs(:ballot_id=>:ballot_id) do |l,r|
+      [l.ballot_id, l.num_required] if pending_puts.exists? {|pp| pp.request == l.ballot_id} and r.status == :success
+    end
     alarm.set_alarm <= (get * parameters).pairs(:request => :request) {|x,p|[x.request, p.duration]}
     alarm.set_alarm <= (get_version * parameters).pairs(:request => :request) {|x,p| [x.request, p.duration]}
     alarm.set_alarm <= (ready_puts * parameters).pairs(:request => :request) {|x,p|[x.request, p.duration]}
@@ -327,18 +331,14 @@ module RWTimeoutQuorumAgent
   # collect remote procedure return values, record votes!
   bloom do
     # put acks in cast_vote
-    cast_vote <= rp.read_ack {|rr| [rr.request, rr.src, "ack", "read ack"]}
-    cast_vote <= rp.version_ack {|vr| [vr.request, vr.src, "ack", "version ack"]}
-    cast_vote <= rp.write_ack {|wr| [wr.request, wr.src, "ack", "write ack"]}
+    # TODO: Make sure timed out acks can't vote or get cached
+    cast_vote <= rp.read_ack {|rr| [rr.request, rr.agent, "ack", "read ack"]}
+    cast_vote <= rp.version_ack {|vr| [vr.request, vr.agent, "ack", "version ack"]}
+    cast_vote <= rp.write_ack {|wr| [wr.request, wr.agent, "ack", "write ack"]}
     # cache remote procedure return values
     read_acks <= rp.read_ack
     version_acks <= rp.version_ack
     write_acks <= rp.write_ack
-    stdio <~ status.inspected
-    stdio <~ read_acks.inspected
-    stdio <~ result.inspected
-    stdio <~ alarm.alarm.inspected
-    stdio <~ alarm.countdowns.inspected
   end
 
   # handling results and timeouts
@@ -353,42 +353,38 @@ module RWTimeoutQuorumAgent
       [a.ident, :success] if result.exists? {|r| r.ballot_id == a.ident}
     end
 
-    # vote successful, timer still going, clear timer: output success
+    # vote successful, timer still going
     status <= (result * alarm.countdowns).pairs(:ballot_id=>:ident) do |l,r|
-      [l.ballot_id, :success] if l.status == :success
+      [l.ballot_id, :success] if l.status == :success and not pending_puts.exists? do |pp|
+        pp.request == l.ballot_id
+      end
     end
 
+    # clear timer if vote was successful, but not if the vote was for the get version phase of a write
     alarm.stop_alarm <= (result * alarm.countdowns).pairs(:ballot_id=>:ident) do |l,r|
-      [l.ballot_id] if l.status == :success 
+      [l.ballot_id] if l.status == :success and not pending_puts.exists? do |pp|
+        pp.request == l.ballot_id
+      end
     end
 
     # clear cached data
-    pending_puts <- (pending_puts * status).pairs(:request=>:request) do |l,r|
-      l if r.state == :success or r.state == :fail
+    pending_puts <- (pending_puts * result).pairs(:request=>:ballot_id) do |l,r|
+      l if r.status == :success or r.status == :fail
     end
     ready_puts <- (ready_puts * status).pairs(:request=>:request) do |l,r|
       l if r.state == :success or r.state == :fail
     end
-
     read_acks <- (read_acks * status).pairs(:request=>:request) do |l,r|
       l if r.state == :success or r.state == :fail
     end
-    version_acks <- (version_acks * status).pairs(:request=>:request) do |l,r|
-      l if r.state == :success or r.state == :fail
+    version_acks <- (version_acks * result).pairs(:request=>:ballot_id) do |l,r|
+      l if r.status == :success or r.status == :fail
     end
     write_acks <- (write_acks * status).pairs(:request=>:request) do |l,r|
       l if r.state == :success or r.state == :fail
     end
     get_cache <- (get_cache * status).pairs(:request=>:request) do |l,r|
       l if r.state == :success or r.state == :fail
-    end
-    # clear put_parameters if we couldn't get enough version acks
-    put_parameters <- (version_acks * status * put_parameters).matches do |l,m,r|
-      r if m.status == :fail
-    end
-    # clear put_parameters if write done
-    put_parameters <- (write_acks * status * put_parameters).matches do |l,m,r|
-      r if m.status == :fail or m.status == :success
     end
   end
 
@@ -404,23 +400,16 @@ module RWTimeoutQuorumAgent
     rr.read_requests <= (read_acks * get_cache * my_addr * status).combos(read_acks.request=>get_cache.request, get_cache.request=>status.request) do |r,g,a,s| 
       [r.request, g.key, a.host] if s.state == :success
     end
-
-    rp.write <+ (rr.write_requests * member).pairs {|l,r| [l.request, r.host, l.key, l.v_vector, l.value]}
   end
 
   # write logic
   bloom do
     # if we get a put, query AT LEAST # required ack servers for vector versions
     get_version <= put {|p| [p.request, p.key]}
-
-    # if version_query was successful, specify the parameters for our write request, which will be issued on the next timestep. Must happen on the next timestep because the corresponding get_version request is successfully completing on this timestep
-    parameters <+ (put_parameters * version_acks * result).matches do |l,m,r|
-      l if r.status == :success
-    end
-
+    
     # if version_query was successful produce the latest version_vector
     vvm.version_matrix <= (version_acks * result).pairs(:request=>:ballot_id) do |l,r|
-      [l.request. l.v_vector] if r.status == :success
+      [l.request, l.v_vector] if r.status == :success
     end
 
     # increment self in merged vector clock
@@ -433,22 +422,34 @@ module RWTimeoutQuorumAgent
 
     # element stays the same if element is not a coordinator
     incremented_coordinators <= (vvs.deserialize_ack * my_addr).pairs do |l,r|
-      l if l.server == r.host
+      l if l.server != r.host
     end
 
     # reserialize the incremented vectors
     vvs.serialize <= incremented_coordinators
 
-    # create the write request on the next timestep, or else we'll get a key error from the finishing get_versions request on this timestep
+    # create the write request on the next timestep, or else we'll get a key error in voting from the finishing get_versions request on this timestep
     ready_puts <+ (pending_puts * vvs.serialize_ack).matches do |l,r|
       [l.request, l.key, r.v_vector, l.value]
     end
   end
 
-#debug
+=begin
+  #debug
   bloom do
-    #stdio <~ status.inspected
+stdio <~ alarm.stop_alarm {|t| ["stop_alarm contains "+t.inspect+" at #{budtime}"]}
+    stdio <~ ready_puts {|t| ["ready_puts contains "+t.inspect+" at #{budtime}"]}
+    stdio <~ write_acks {|t| ["write_acks contains "+t.inspect+" at #{budtime}"]}
+    stdio <~ status {|t| ["status contains "+t.inspect+" at #{budtime}"]}
+    stdio <~ version_acks {|t| ["version_acks contains "+t.inspect+" at #{budtime}"]}
+    stdio <~ result {|t| ["result contains "+t.inspect+" at #{budtime}"]}
+    stdio <~ alarm.alarm {|t| ["alarm contains "+t.inspect+" at #{budtime}"]}
+    stdio <~ alarm.countdowns {|t| ["countdowns contains "+t.inspect+" at #{budtime}"]}
+    stdio <~ num_required {|t| ["num_required contains "+t.inspect+" at #{budtime}"]}
+    stdio <~ pending_puts {|t| ["pending_puts contains "+t.inspect+" at #{budtime}"]}
   end
+=end
+
 end
 
 # This module can be used by a client module to perform read and write
@@ -500,11 +501,22 @@ module SessionQuorumKVS
 
 end
 
+# write test
 =begin
-a = RWTimeoutQuorumAgent.new
+a = RWTimeoutQuorumAgent.new(:ip=>'127.0.0.1',:port=>'9007')
 a.add_member <+ [['127.0.0.1:9007', 0],['127.0.0.1:9008', 1]]
 a.my_id <+ [[0]]
-a.get <+ [[1, "yay"]]
-a.parameters <+ [[1, 3, 1]]
+a.put <+ [[1, "key", "value"]]
+a.parameters <+ [[1, 1, 20]]
+20.times {a.tick}
+=end
+
+# get version test
+=begin
+a = RWTimeoutQuorumAgent.new(:ip=>'127.0.0.1',:port=>'9007')
+a.add_member <+ [['127.0.0.1:9007', 0],['127.0.0.1:9008', 1]]
+a.my_id <+ [[0]]
+a.get_version <+ [[1, "key"]]
+a.parameters <+ [[1, 1, 20]]
 10.times {a.tick}
 =end
