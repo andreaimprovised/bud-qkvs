@@ -244,8 +244,10 @@ end
 module VersionVectorKVS
   include VersionVectorKVSProtocol
   import VersionVectorConcurrency => :vvc
+  import VersionVectorSerializer => :vvs
 
   state do
+    table :member, [:host] => [:ident]
     table :kv_store, [:key, :v_vector] => [:value]
     scratch :write_to_ack, [:request] => [:key]
   end
@@ -258,6 +260,12 @@ module VersionVectorKVS
     version_ack <= (version_query * kv_store).pairs(:key => :key) do |v,s|
       [v.request, s.v_vector]
     end
+    vvs.serialize <= (version_query * member).pairs do |l,r|
+      [l.request, r.host, 0] if not kv_store.exists? do |s|
+        s.key == l.key
+      end
+    end
+    version_ack <= vvs.serialize_ack
   end
   
   # Hanlde Write Requests
@@ -287,4 +295,3 @@ module VersionVectorKVS
     end
   end
 end
-
